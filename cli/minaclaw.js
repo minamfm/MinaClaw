@@ -5,8 +5,16 @@ const inquirer = require('inquirer');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
-const { execSync } = require('child_process');
+const { execSync, exec } = require('child_process');
 const yaml = require('js-yaml');
+
+const DAEMON = 'http://localhost:3000';
+
+// If invoked as `minaclaw watch`, skip the menu and go straight to watch mode.
+if (process.argv[2] === 'watch') {
+  watchMode().catch(console.error);
+  // watchMode() never resolves; process stays alive until Ctrl+C
+}
 
 const CONFIG_DIR = path.join(__dirname, '..', 'config');
 const COMPOSE_FILE = path.join(__dirname, '..', 'docker-compose.yml');
@@ -148,6 +156,7 @@ async function mainMenu() {
       message: 'MinaClaw — what would you like to do?',
       choices: [
         { name: 'Chat with Agent',              value: 'chat' },
+        { name: 'Watch (run Telegram commands)', value: 'watch' },
         { name: 'Configure Providers & Model',  value: 'configure' },
         { name: 'Manage Safe Folders',          value: 'folders' },
         { name: 'Restart Daemon',               value: 'restart' },
@@ -158,6 +167,7 @@ async function mainMenu() {
 
     switch (choice) {
       case 'chat':      await chatSession(); break;
+      case 'watch':     await watchMode(); break;
       case 'configure': await configureMenu(); break;
       case 'folders':   await manageSafeFolders(); break;
       case 'restart':   restartDaemon(); break;
@@ -486,6 +496,20 @@ async function editSystemPrompt() {
   console.log('✓ System prompt updated.');
 }
 
+// ─── Host command execution ───────────────────────────────────────────────────
+
+function executeOnHost(command) {
+  return new Promise((resolve) => {
+    exec(command, { timeout: 30000 }, (error, stdout, stderr) => {
+      let out = '';
+      if (stdout) out += stdout;
+      if (stderr) out += `STDERR:\n${stderr}`;
+      if (error && !out) out += error.message;
+      resolve(out.trim() || '(no output)');
+    });
+  });
+}
+
 // ─── Chat ─────────────────────────────────────────────────────────────────────
 
 async function chatSession() {
@@ -493,14 +517,84 @@ async function chatSession() {
   while (true) {
     const { message } = await inquirer.prompt([{ name: 'message', message: '>' }]);
     if (message.toLowerCase() === 'exit') break;
+
     try {
-      const res = await axios.post('http://localhost:3000/chat', { message });
-      console.log(`\nMinaClaw: ${res.data.response}\n`);
+      const res = await axios.post(`${DAEMON}/chat`, { message });
+      const data = res.data;
+
+      if (data.type === 'command_proposal') {
+        console.log(`\n  ${yellow('Proposed command')}`);
+        console.log(`  Reason : ${data.explanation}`);
+        console.log(`  Command: ${cyan(data.command)}\n`);
+
+        const { confirm } = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'confirm',
+          message: 'Execute this on your machine?',
+          default: false,
+        }]);
+
+        if (confirm) {
+          console.log(dim('  Running…'));
+          const output = await executeOnHost(data.command);
+
+          // Send the raw output to the daemon — the agent formulates the reply.
+          const followUp = await axios.post(`${DAEMON}/chat`, {
+            message: `Command \`${data.command}\` was executed. Output:\n\`\`\`\n${output}\n\`\`\``,
+          });
+          const summary = followUp.data.response || followUp.data;
+          console.log(`\nMinaClaw: ${summary}\n`);
+        } else {
+          console.log(dim('  Command declined.\n'));
+        }
+      } else {
+        console.log(`\nMinaClaw: ${data.response}\n`);
+      }
     } catch {
       console.error('Cannot reach daemon on localhost:3000. Is it running? Use "Restart Daemon" from the menu.');
       break;
     }
   }
+}
+
+// ─── Watch mode (Telegram command executor) ───────────────────────────────────
+
+async function watchMode() {
+  console.log('\n--- Watch Mode — polling for Telegram-approved commands (Ctrl+C to stop) ---\n');
+
+  const poll = async () => {
+    try {
+      const res = await axios.get(`${DAEMON}/pending-commands`);
+      const commands = res.data;
+
+      for (const cmd of commands) {
+        console.log(`\n${yellow('▶')} Executing (chat ${cmd.chatId}): ${cyan(cmd.command)}`);
+        const output = await executeOnHost(cmd.command);
+        console.log(`${dim('Output:')} ${output.slice(0, 300)}${output.length > 300 ? '…' : ''}`);
+
+        await axios.post(`${DAEMON}/command-result`, {
+          chatId: cmd.chatId,
+          command: cmd.command,
+          output,
+        });
+        console.log(green('✓ Result sent to Telegram.'));
+      }
+    } catch {
+      // Daemon not running — will retry silently
+    }
+  };
+
+  // Poll every 3 seconds until the process is killed
+  await poll();
+  const interval = setInterval(poll, 3000);
+
+  // Keep the process alive; clean up on Ctrl+C
+  await new Promise((resolve) => {
+    process.once('SIGINT', () => { clearInterval(interval); resolve(); });
+    process.once('SIGTERM', () => { clearInterval(interval); resolve(); });
+  });
+
+  console.log('\nWatch mode stopped.');
 }
 
 // ─── Safe Folders ─────────────────────────────────────────────────────────────

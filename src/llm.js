@@ -27,10 +27,33 @@ const grok = new OpenAI({
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const gemini = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
+// Injected ahead of the user-defined system prompt so every provider supports
+// command proposals without requiring manual system-prompt edits.
+const COMMAND_CAPABILITY = `\
+When the user's request would benefit from running a shell command on their system, \
+respond ONLY with a JSON object in this exact format — no markdown fences, no other text:
+{"type":"command_proposal","explanation":"one-sentence reason","command":"exact command to run"}
+The command will be shown to the user for approval before anything is executed. \
+Only propose a command when genuinely needed. For all other replies, respond normally as plain text.
+`;
+
+function parseResponse(text) {
+  const trimmed = text.trim();
+  // Strip optional ```json fences some models add
+  const cleaned = trimmed.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+  if (cleaned.startsWith('{')) {
+    try {
+      const json = JSON.parse(cleaned);
+      if (json.type === 'command_proposal' && json.command) return json;
+    } catch { /* fall through */ }
+  }
+  return { type: 'text', response: text };
+}
+
 async function queryLLM(messages) {
   const config = loadConfig();
   const activeModel = config.activeModel;
-  const sysPrompt = config.systemPrompt;
+  const sysPrompt = `${COMMAND_CAPABILITY}\n\n${config.systemPrompt}`;
   const modelName = (config.models && config.models[activeModel]) || activeModel;
 
   const fullMessages = [
@@ -103,4 +126,4 @@ async function queryOllama(messages, model) {
   return response.data.message.content;
 }
 
-module.exports = { queryLLM };
+module.exports = { queryLLM, parseResponse };

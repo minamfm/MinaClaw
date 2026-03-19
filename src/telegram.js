@@ -1,9 +1,9 @@
 const { Telegraf } = require('telegraf');
-const { queryLLM } = require('./llm');
+const { queryLLM, parseResponse } = require('./llm');
 const { updateConfig } = require('./config');
 const { handleScheduling } = require('./scheduler');
 const { connectToChromeAndLearn } = require('./browser');
-const { executeShellCommand } = require('./tools');
+const queue = require('./command-queue');
 
 function startTelegramBot() {
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -14,18 +14,18 @@ function startTelegramBot() {
 
   const bot = new Telegraf(token);
 
-  // Provide a command to easily switch models for testing
   bot.command('model', (ctx) => {
     const args = ctx.message.text.split(' ');
     if (args.length > 1) {
       const newModel = args[1];
-      if (['openai', 'gemini', 'kimi', 'ollama'].includes(newModel)) {
+      const valid = ['openai', 'anthropic', 'gemini', 'mistral', 'grok', 'kimi', 'ollama'];
+      if (valid.includes(newModel)) {
         updateConfig({ activeModel: newModel });
-        return ctx.reply(`Switched active model to: ${newModel}`);
+        return ctx.reply(`Switched active provider to: ${newModel}`);
       }
-      return ctx.reply('Invalid model. Choose from: openai, gemini, kimi, ollama');
+      return ctx.reply(`Invalid provider. Choose from: ${valid.join(', ')}`);
     }
-    return ctx.reply('Please specify a model. e.g., /model gemini');
+    return ctx.reply('Please specify a provider. e.g., /model gemini');
   });
 
   bot.command('learn', async (ctx) => {
@@ -42,37 +42,90 @@ function startTelegramBot() {
   bot.command('sh', async (ctx) => {
     const command = ctx.message.text.replace('/sh', '').trim();
     if (!command) return ctx.reply('Please provide a command. e.g., /sh ls -la');
-    ctx.reply(`Executing: ${command}`);
-    const result = await executeShellCommand(command);
-    return ctx.reply(`\`\`\`\n${result}\n\`\`\``, { parse_mode: 'Markdown' });
+
+    // /sh proposes the command through the same approval flow
+    const id = queue.enqueue(ctx.chat.id, command, 'Manually requested via /sh');
+    return ctx.reply(
+      `📋 *Command proposal*\n\n` +
+      `_Reason:_ Manually requested via /sh\n` +
+      `\`\`\`\n${command}\n\`\`\`\n\n` +
+      `This will run on your host machine via the MinaClaw watcher.`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '✅ Run it', callback_data: `approve:${id}` },
+            { text: '❌ Cancel',  callback_data: `cancel:${id}`  },
+          ]],
+        },
+      }
+    );
+  });
+
+  // Inline keyboard responses
+  bot.on('callback_query', async (ctx) => {
+    const data = ctx.callbackQuery.data || '';
+    const [action, id] = data.split(':');
+
+    if (action === 'approve') {
+      // Command stays in the queue; the host CLI watcher will pick it up
+      await ctx.answerCbQuery('Queued — waiting for host watcher.');
+      await ctx.editMessageText(
+        ctx.callbackQuery.message.text + '\n\n⏳ _Approved — waiting for host CLI watcher to execute…_',
+        { parse_mode: 'Markdown' }
+      );
+    } else if (action === 'cancel') {
+      queue.cancel(id);
+      await ctx.answerCbQuery('Cancelled.');
+      await ctx.editMessageText(
+        ctx.callbackQuery.message.text + '\n\n❌ _Cancelled._',
+        { parse_mode: 'Markdown' }
+      );
+    }
   });
 
   bot.on('text', async (ctx) => {
     const text = ctx.message.text;
 
-    // Very basic interceptor for "remind me"
-    // In a real implementation, we'd pass this to the LLM to extract intent & time.
     if (text.toLowerCase().includes('remind me')) {
       const scheduled = await handleScheduling(text, ctx);
       if (scheduled) return;
     }
 
-    // Otherwise, normal conversation
     ctx.sendChatAction('typing');
-    const response = await queryLLM([{ role: 'user', content: text }]);
-    ctx.reply(response);
+    const raw = await queryLLM([{ role: 'user', content: text }]);
+    const parsed = parseResponse(raw);
+
+    if (parsed.type === 'command_proposal') {
+      const id = queue.enqueue(ctx.chat.id, parsed.command, parsed.explanation);
+      return ctx.reply(
+        `📋 *Command proposal*\n\n` +
+        `_Reason:_ ${parsed.explanation}\n` +
+        `\`\`\`\n${parsed.command}\n\`\`\`\n\n` +
+        `This will run on your host machine via the MinaClaw watcher.`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [[
+              { text: '✅ Run it', callback_data: `approve:${id}` },
+              { text: '❌ Cancel',  callback_data: `cancel:${id}`  },
+            ]],
+          },
+        }
+      );
+    }
+
+    ctx.reply(parsed.response);
   });
 
   bot.on('voice', async (ctx) => {
-    // TODO: implement voice downloading and Whisper transcription
     ctx.reply('Voice notes received. Transcription module pending implementation.');
   });
 
   bot.launch();
   console.log('Telegram bot started.');
 
-  // Enable graceful stop
-  process.once('SIGINT', () => bot.stop('SIGINT'));
+  process.once('SIGINT',  () => bot.stop('SIGINT'));
   process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
   return bot;
