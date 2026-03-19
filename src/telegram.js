@@ -118,7 +118,17 @@ function startTelegramBot() {
     ctx.reply('Voice notes received. Transcription module pending implementation.');
   });
 
-  bot.launch();
+  const launchBot = () => {
+    bot.launch().catch(err => {
+      if (err.message && err.message.includes('409')) {
+        console.warn('Telegram 409 conflict — another instance is still shutting down. Retrying in 5s…');
+        setTimeout(launchBot, 5000);
+      } else {
+        console.error('Telegram bot error:', err.message);
+      }
+    });
+  };
+  launchBot();
   console.log('Telegram bot started.');
 
   process.once('SIGINT',  () => bot.stop('SIGINT'));
