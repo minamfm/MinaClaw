@@ -1,0 +1,16 @@
+services:
+  minaclaw:
+    build: .
+    container_name: minaclaw-daemon
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000" # Internal API for host CLI
+    volumes:
+      - ./config:/app/config
+      - ./skills:/app/skills
+      # Dynamic safe mounts go here
+      # Example: - /home/user/safe_docs:/mnt/safe/docs
+    env_file:
+      - ./config/.env
+    environment:
+      - NODE_ENV=production
