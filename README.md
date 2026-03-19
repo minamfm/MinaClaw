@@ -7,11 +7,11 @@ MinaClaw is a reliable, always-on AI daemon designed to assist with scheduling, 
 ## Features
 
 - **24/7 Availability**: Runs as a Docker daemon with internal task scheduling.
-- **Multi-LLM Support**: Plug-and-play integration for OpenAI, Gemini, Kimi (Moonshot), and local Ollama instances.
-- **Telegram Interface**: Chat with your agent, switch models via `/model`, and schedule reminders via natural language.
+- **Multi-LLM Support**: Plug-and-play integration for OpenAI, Anthropic, Gemini, Mistral, xAI Grok, Kimi (Moonshot), and local Ollama instances — switch providers and submodels without touching any files.
+- **Telegram Interface**: Chat with your agent, switch providers via `/model`, and schedule reminders via natural language.
 - **Remote Browser Learning**: Connects to a Chrome instance on your LAN to "learn" new websites and generate markdown skills.
 - **Secure Sandbox**: File operations are restricted to user-defined "safe" host directories mounted into the container.
-- **Interactive CLI**: Manage API keys, mount safe folders, and chat with the agent directly from your terminal.
+- **Interactive CLI**: A polished terminal UI — configure providers individually, pick exact submodels, and see live configuration status without ever manually editing a file.
 
 ## Prerequisites
 
@@ -21,26 +21,47 @@ MinaClaw is a reliable, always-on AI daemon designed to assist with scheduling, 
 
 ## Installation
 
-1.  **Clone the repository**:
-    ```bash
-    git clone https://github.com/minamfm/MinaClaw.git
-    cd MinaClaw
-    ```
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/minamfm/MinaClaw.git
+   cd MinaClaw
+   ```
 
-2.  **Install dependencies** for the host-side CLI:
-    ```bash
-    npm install
-    ```
+2. **Install dependencies**:
+   ```bash
+   npm install
+   ```
 
-3.  **Launch the Interactive CLI**:
-    ```bash
-    node cli/minaclaw.js
-    ```
+3. **Link the CLI as a global command** (optional, run once):
+   ```bash
+   npm link
+   ```
 
-4.  **Follow the CLI prompts**:
-    - **Configure API Keys & Model**: Enter your Telegram token and LLM API keys.
-    - **Manage Safe Folders**: Add host directories (e.g., `~/Documents/mina-safe`) that you want the agent to access.
-    - **Restart Daemon**: This will build the Docker image and start the MinaClaw service.
+4. **Launch the CLI**:
+   ```bash
+   minaclaw
+   # or without linking:
+   node cli/minaclaw.js
+   ```
+
+5. **Follow the prompts**:
+   - **Configure Providers & Model**: Set up whichever LLM providers you want — each has its own screen, you're never forced to enter all keys at once.
+   - **Manage Safe Folders**: Add host directories you want the agent to access.
+   - **Restart Daemon**: Builds the Docker image and starts the MinaClaw service.
+
+## Supported LLM Providers
+
+Each provider is configured independently via the CLI. The active provider and per-provider model are saved to `config/config.json` and take effect immediately.
+
+| Provider | Models available |
+|---|---|
+| **OpenAI** | gpt-4.1, gpt-4.1-mini, gpt-4.1-nano, gpt-4o, gpt-4o-mini, o3, o4-mini, o3-mini, o3-pro, o1 |
+| **Anthropic** | claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5 |
+| **Gemini** | gemini-2.5-flash, gemini-2.5-pro, gemini-1.5-flash, gemini-1.5-pro |
+| **Mistral** | mistral-large-2411, mistral-medium, mistral-small, magistral-medium, magistral-small, codestral |
+| **xAI Grok** | grok-4.1, grok-4.1-mini, grok-4.1-fast-reasoning, grok-4.1-fast-non-reasoning, grok-3-beta |
+| **Kimi (Moonshot)** | moonshot-v1-8k, moonshot-v1-32k, moonshot-v1-128k |
+| **Ollama (Local)** | any model you have pulled (e.g. llama3, mistral, codellama) |
 
 ## Usage
 
@@ -48,22 +69,24 @@ MinaClaw is a reliable, always-on AI daemon designed to assist with scheduling, 
 Once the daemon is running, message your bot on Telegram:
 - **General Help**: Just chat in natural language.
 - **Reminders**: "Remind me in 15 minutes to feed the cat."
-- **Model Swap**: `/model gemini` or `/model openai`.
-- **Shell Commands**: `/sh ls -la` (outputs from within the container's `/mnt/safe` root).
+- **Model Swap**: `/model gemini` or `/model anthropic`.
+- **Shell Commands**: `/sh ls -la` (runs inside the container, rooted at `/mnt/safe`).
 - **Learn Website**: `/learn https://example.com` (requires Chrome running with remote debugging).
 
 ### Host-side CLI
-Run `node cli/minaclaw.js` anytime to:
-- Directly chat with the agent from your terminal.
-- Update configuration without manually editing files.
-- Monitor logs or update safe mount points.
+Run `minaclaw` (or `node cli/minaclaw.js`) anytime to:
+- Chat with the agent directly from your terminal.
+- Configure providers — each provider has its own screen showing whether it's configured and which model is selected.
+- Pick a specific submodel per provider (e.g. `o3-pro` for hard reasoning tasks, `gpt-4.1-nano` for fast/cheap operations).
+- Edit the system prompt in your `$EDITOR`.
+- Add or remove safe folder mounts.
 
 ### Browser Learning (CDP)
 To use the `/learn` feature, start Chrome on your LAN with remote debugging enabled:
 ```bash
 google-chrome --remote-debugging-port=9222
 ```
-Ensure `CHROME_CDP_URL` in your `.env` (managed via the CLI) points to the correct IP/port.
+Set `CHROME_CDP_URL` via the Ollama config screen or directly in `config/.env` if your Chrome is on a different machine.
 
 ## Security
 MinaClaw is designed with isolation in mind.

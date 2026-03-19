@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
+  "bin": {
+    "minaclaw": "./cli/minaclaw.js"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -11,12 +14,13 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.55.1",
     "@google/genai": "^1.46.0",
     "axios": "^1.13.6",
     "body-parser": "^2.2.2",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
-    "inquirer": "^13.3.2",
+    "inquirer": "^8.2.5",
     "js-yaml": "^4.1.1",
     "node-cron": "^4.2.1",
     "openai": "^6.32.0",

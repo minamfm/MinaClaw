@@ -8,6 +8,15 @@ const CONFIG_PATH = process.env.NODE_ENV === 'production'
 const defaultConfig = {
   activeModel: 'openai', // 'openai', 'gemini', 'kimi', 'ollama'
   systemPrompt: 'You are MinaClaw, a reliable 24/7 personal AI agent. Your goal is to assist the user efficiently.',
+  models: {
+    openai:    'gpt-4.1',
+    gemini:    'gemini-2.5-flash',
+    kimi:      'moonshot-v1-8k',
+    ollama:    'llama3',
+    anthropic: 'claude-sonnet-4-6',
+    mistral:   'mistral-large-2411',
+    grok:      'grok-4.1',
+  },
 };
 
 function loadConfig() {
