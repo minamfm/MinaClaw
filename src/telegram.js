@@ -90,8 +90,10 @@ function startTelegramBot() {
     }
 
     ctx.sendChatAction('typing');
+    const typingInterval = setInterval(() => ctx.sendChatAction('typing'), 4000);
     session.append(sessionId, 'user', text);
     const { text: llmText, usage } = await queryLLM(session.get(sessionId));
+    clearInterval(typingInterval);
     session.append(sessionId, 'assistant', llmText);
     if (usage) session.addUsage(sessionId, usage.input, usage.output);
     const parsed = parseResponse(llmText);
