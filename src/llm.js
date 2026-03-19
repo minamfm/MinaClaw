@@ -132,9 +132,22 @@ async function queryGemini(messages, model) {
 }
 
 async function queryOllama(messages, model) {
-  const url = process.env.OLLAMA_URL || 'http://localhost:11434';
-  const response = await axios.post(`${url}/api/chat`, { model, messages, stream: false });
-  return response.data.message.content;
+  const url = process.env.OLLAMA_URL || 'http://host.docker.internal:11434';
+  try {
+    const response = await axios.post(`${url}/api/chat`, { model, messages, stream: false });
+    return response.data.message.content;
+  } catch (err) {
+    if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
+      // Ollama is likely bound to 127.0.0.1 only and can't be reached from Docker.
+      // Return a self-healing command proposal so the user can fix it with one click.
+      return JSON.stringify({
+        type: 'command_proposal',
+        explanation: `Ollama isn't reachable at ${url}. It's bound to 127.0.0.1 only and can't be reached from inside the agent container. This command reconfigures Ollama to accept connections from Docker and restarts it.`,
+        command: `sudo mkdir -p /etc/systemd/system/ollama.service.d && printf '[Service]\\nEnvironment="OLLAMA_HOST=0.0.0.0"\\n' | sudo tee /etc/systemd/system/ollama.service.d/override.conf && sudo systemctl daemon-reload && sudo systemctl restart ollama`,
+      });
+    }
+    throw err;
+  }
 }
 
 module.exports = { queryLLM, parseResponse };
