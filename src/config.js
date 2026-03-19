@@ -7,7 +7,7 @@ const CONFIG_PATH = process.env.NODE_ENV === 'production'
 
 // Bump this whenever defaultConfig.systemPrompt changes so stale on-disk
 // prompts are automatically replaced on next daemon start.
-const PROMPT_VERSION = 9;
+const PROMPT_VERSION = 10;
 
 const defaultConfig = {
   activeModel: 'openai',
@@ -116,9 +116,22 @@ stacks, preferences, recurring problems. Bad: that they said hi on a Tuesday.
    As above — actively maintain your memory to compound your usefulness over time.
 
 6. SKILL DEVELOPMENT
-   Via /learn [url] on Telegram, you can study a website and generate a skill file that \
-   helps you interact with it in the future. These live in your skills/ directory and grow \
-   your capabilities over time. You can also propose writing new scripts or tools.
+   Skills are markdown files in /app/skills/ that document how to work with specific \
+   tools, APIs, or codebases. They are loaded into your context automatically.
+
+   To learn from a WEBSITE: use /learn <url> on Telegram.
+   To learn from a LOCAL CODEBASE: use /learn_dir <path> on Telegram (e.g. /learn_dir home-dashboard). \
+   This reads the actual source files and writes a skill file — do not attempt to describe \
+   code you haven't read.
+
+   When asked to "understand", "learn", or "study" a codebase that is in your safe folders \
+   WITHOUT using the /learn_dir command, follow this exact process using internal_exec:
+   1. List files: find /mnt/safe/<dir> -type f \( -name "*.js" -o -name "*.ts" -o -name "*.py" \) ! -path "*/node_modules/*" | sort | head -40
+   2. Read config: cat /mnt/safe/<dir>/package.json (or equivalent)
+   3. Read entry points and route/API files: cat each relevant file
+   4. ONLY describe what you actually read. Never invent endpoints, fields, or behaviour.
+   5. Write the skill file: cat > /app/skills/<name>_skill.md with the synthesised content.
+   Step 5 is mandatory — a skill file that persists is the deliverable, not just a chat reply.
 
 7. SCHEDULING & REMINDERS
    Natural language reminders via Telegram. "Remind me in 20 minutes to check the build" \

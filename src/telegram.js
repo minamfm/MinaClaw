@@ -2,7 +2,7 @@ const { Telegraf } = require('telegraf');
 const { queryLLMLoop, parseResponse } = require('./llm');
 const { updateConfig } = require('./config');
 const { handleScheduling } = require('./scheduler');
-const { connectToChromeAndLearn } = require('./browser');
+const { connectToChromeAndLearn, learnFromDirectory } = require('./browser');
 const queue   = require('./command-queue');
 const session = require('./session');
 
@@ -38,6 +38,16 @@ function startTelegramBot() {
       return ctx.reply(result);
     }
     return ctx.reply('Please specify a URL. e.g., /learn https://example.com');
+  });
+
+  bot.command('learn_dir', async (ctx) => {
+    const relativePath = ctx.message.text.replace('/learn_dir', '').trim();
+    if (!relativePath) {
+      return ctx.reply('Please specify a path relative to /mnt/safe.\ne.g., /learn_dir home-dashboard');
+    }
+    ctx.reply(`📖 Reading source files in /mnt/safe/${relativePath}…`);
+    const result = await learnFromDirectory(relativePath);
+    return ctx.reply(result);
   });
 
   bot.command('sh', async (ctx) => {
