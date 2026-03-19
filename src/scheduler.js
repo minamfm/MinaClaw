@@ -21,7 +21,7 @@ Text: "${text}"
 
   try {
     const response = await queryLLM([{ role: 'user', content: extractionPrompt }]);
-    const parsed = JSON.parse(response.replace(/```json/g, '').replace(/```/g, '').trim());
+    const parsed = JSON.parse(response.text.replace(/```json/g, '').replace(/```/g, '').trim());
     
     if (parsed.is_reminder && parsed.cron_expression) {
       cron.schedule(parsed.cron_expression, () => {
