@@ -561,6 +561,9 @@ function executeOnHost(command) {
 
 // ─── Chat ─────────────────────────────────────────────────────────────────────
 
+// Commands the user has approved for the duration of this CLI session.
+const alwaysAllowedCommands = new Set();
+
 // Recursively handle a daemon response — supports chained command proposals.
 async function handleDaemonResponse(data) {
   if (data.type === 'command_proposal') {
@@ -568,14 +571,25 @@ async function handleDaemonResponse(data) {
     console.log(`  Reason : ${data.explanation}`);
     console.log(`  Command: ${cyan(data.command)}\n`);
 
-    const { confirm } = await inquirer.prompt([{
-      type: 'confirm',
-      name: 'confirm',
-      message: 'Execute this on your machine?',
-      default: false,
-    }]);
+    // Auto-run if user already said "always allow" for this command this session
+    if (alwaysAllowedCommands.has(data.command)) {
+      console.log(dim('  Auto-executing (always allowed this session)…'));
+    } else {
+      const { choice } = await inquirer.prompt([{
+        type: 'list',
+        name: 'choice',
+        message: 'Execute this on your machine?',
+        choices: [
+          { name: 'Yes, run it',                value: 'yes'    },
+          { name: 'Yes, always this session',   value: 'always' },
+          { name: 'No, skip',                   value: 'no'     },
+        ],
+        default: 'no',
+      }]);
 
-    if (!confirm) { console.log(dim('  Command declined.\n')); return; }
+      if (choice === 'no') { console.log(dim('  Command declined.\n')); return; }
+      if (choice === 'always') alwaysAllowedCommands.add(data.command);
+    }
 
     console.log(dim('  Running…'));
     const output = await executeOnHost(data.command);

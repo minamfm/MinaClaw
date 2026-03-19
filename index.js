@@ -56,16 +56,16 @@ app.post('/command-result', async (req, res) => {
 
   let reply;
   try {
-    const { text, usage } = await queryLLM(session.get(sessionId));
-    const parsed = parseResponse(text);
-    session.append(sessionId, 'assistant', text);
+    const { text, usage, parsed, newMessages } = await queryLLMLoop(session.get(sessionId));
+    for (const msg of newMessages) session.append(sessionId, msg.role, msg.content);
     if (usage) session.addUsage(sessionId, usage.input, usage.output);
-    reply = parsed.response || text;
+    reply = (parsed.type === 'text' ? parsed.response : null) || text;
   } catch {
     reply = `Command finished.\n\`\`\`\n${output}\n\`\`\``;
   }
 
   if (bot) {
+    // Try sending as plain text; guaranteed to succeed regardless of content
     try { await bot.telegram.sendMessage(chatId, reply); }
     catch (err) { console.error('Failed to send Telegram message:', err.message); }
   }

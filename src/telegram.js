@@ -51,23 +51,37 @@ function startTelegramBot() {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [[
-            { text: '✅ Run it', callback_data: `approve:${id}` },
-            { text: '❌ Cancel',  callback_data: `cancel:${id}`  },
+            { text: '✅ Run it',              callback_data: `approve:${id}`     },
+            { text: '🔁 Always this session', callback_data: `approve_all:${id}` },
+            { text: '❌ Cancel',              callback_data: `cancel:${id}`      },
           ]],
         },
       }
     );
   });
 
-  // Inline keyboard responses (approve / cancel command proposals)
+  // Inline keyboard responses (approve / approve_all / cancel command proposals)
   bot.on('callback_query', async (ctx) => {
     const data = ctx.callbackQuery.data || '';
     const [action, id] = data.split(':');
 
     if (action === 'approve') {
-      await ctx.answerCbQuery('Queued — waiting for host watcher.');
+      queue.approve(id);
+      await ctx.answerCbQuery('Approved — waiting for host watcher.');
       await ctx.editMessageText(
         ctx.callbackQuery.message.text + '\n\n⏳ _Approved — waiting for host CLI watcher to execute…_',
+        { parse_mode: 'Markdown' }
+      );
+    } else if (action === 'approve_all') {
+      const item = queue.getById(id);
+      if (item) {
+        queue.approveAll(item.chatId, item.command);
+      } else {
+        queue.approve(id);
+      }
+      await ctx.answerCbQuery('Always allowed this session.');
+      await ctx.editMessageText(
+        ctx.callbackQuery.message.text + '\n\n⚡ _Always allowed this session — queued for execution._',
         { parse_mode: 'Markdown' }
       );
     } else if (action === 'cancel') {
@@ -106,14 +120,25 @@ function startTelegramBot() {
 
     if (parsed.type === 'command_proposal') {
       const id = queue.enqueue(ctx.chat.id, parsed.command, parsed.explanation);
+
+      // Auto-approve if user previously said "always allow" for this command
+      if (queue.isAutoApproved(ctx.chat.id, parsed.command)) {
+        queue.approve(id);
+        return ctx.reply(
+          `⚡ *Auto-executing \\(pre\\-approved this session\\)*\n\`\`\`\n${parsed.command}\n\`\`\``,
+          { parse_mode: 'MarkdownV2' }
+        );
+      }
+
       return ctx.reply(
         `📋 *Command proposal*\n\n_Reason:_ ${parsed.explanation}\n\`\`\`\n${parsed.command}\n\`\`\`\n\nThis will run on your host machine via the MinaClaw watcher.`,
         {
           parse_mode: 'Markdown',
           reply_markup: {
             inline_keyboard: [[
-              { text: '✅ Run it', callback_data: `approve:${id}` },
-              { text: '❌ Cancel',  callback_data: `cancel:${id}`  },
+              { text: '✅ Run it',              callback_data: `approve:${id}`     },
+              { text: '🔁 Always this session', callback_data: `approve_all:${id}` },
+              { text: '❌ Cancel',              callback_data: `cancel:${id}`      },
             ]],
           },
         }
