@@ -156,7 +156,7 @@ async function queryOllama(messages, model) {
   try {
     const response = await axios.post(
       `${url}/api/chat`,
-      { model, messages, stream: false, think: false },
+      { model, messages, stream: false, think: false, keep_alive: '2h' },
       { timeout: 120_000 },
     );
     return {
