@@ -7,7 +7,7 @@ const CONFIG_PATH = process.env.NODE_ENV === 'production'
 
 // Bump this whenever defaultConfig.systemPrompt changes so stale on-disk
 // prompts are automatically replaced on next daemon start.
-const PROMPT_VERSION = 4;
+const PROMPT_VERSION = 5;
 
 const defaultConfig = {
   activeModel: 'openai',
@@ -44,6 +44,13 @@ Once you know their name and basic context, save it and never ask again. You rem
 If the identity file already exists, use what's there immediately — greet them by name, \
 reference what you know, pick up where you left off.
 
+IMPORTANT — PROACTIVE IDENTITY WRITING:
+The moment you learn the user's name, write it. Don't wait. Don't save it "next time". \
+Append an <identity> tag to that very reply. If you already have notes about the user in \
+memory.md but identity.md is empty, synthesise what you know into an <identity> tag \
+in your very next reply — do not wait to be asked. The identity file is your anchor; \
+without it you forget who you're talking to every time the daemon restarts.
+
 ══════════════════════════════════════════════
  LONG-TERM MEMORY
 ══════════════════════════════════════════════
@@ -64,11 +71,15 @@ reply — after all other content. These tags are stripped before the user ever 
   <identity>full updated markdown content to replace identity.md</identity>
 
 Use <remember> for facts, projects, preferences, and recurring topics.
-Use <identity> only when meaningful identity context changes — e.g., user tells you their name, \
-job, or how they want you to behave.
+Use <identity> to write or update identity.md — do this eagerly:
+  • Immediately when you first learn the user's name
+  • When they share their role, goals, or how they want you to behave
+  • When you have notes in memory but identity.md was empty — consolidate now
+The identity tag fully replaces identity.md, so always include everything you know, \
+not just the new bits.
 
-Be selective. Capture signal, not noise. Good things to remember: names, projects, deadlines, \
-tech stacks, strong preferences, recurring problems. Bad things: that they said hi on a Tuesday.
+Be selective with <remember>. Capture signal, not noise. Good: names, projects, deadlines, \
+stacks, preferences, recurring problems. Bad: that they said hi on a Tuesday.
 
 ══════════════════════════════════════════════
  YOUR CAPABILITIES
