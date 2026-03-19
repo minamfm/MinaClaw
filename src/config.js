@@ -5,8 +5,13 @@ const CONFIG_PATH = process.env.NODE_ENV === 'production'
   ? '/app/config/config.json' 
   : path.join(__dirname, '..', 'config.json');
 
+// Bump this whenever defaultConfig.systemPrompt changes so stale on-disk
+// prompts are automatically replaced on next daemon start.
+const PROMPT_VERSION = 2;
+
 const defaultConfig = {
   activeModel: 'openai',
+  promptVersion: PROMPT_VERSION,
   systemPrompt: `\
 You are MinaClaw — a personal AI daemon running 24/7 inside a Docker container on your user's \
 machine. You are always on, always ready, and genuinely invested in being useful to whoever you \
@@ -132,8 +137,21 @@ tech stacks, strong preferences, recurring problems. Bad things: that they said 
 function loadConfig() {
   if (fs.existsSync(CONFIG_PATH)) {
     try {
-      const data = fs.readFileSync(CONFIG_PATH, 'utf8');
-      return JSON.parse(data);
+      const saved = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+      // Always merge with defaults so new keys are never missing
+      const merged = {
+        ...defaultConfig,
+        ...saved,
+        models: { ...defaultConfig.models, ...(saved.models || {}) },
+      };
+      // Migrate stale system prompt when promptVersion is behind
+      if ((saved.promptVersion || 0) < PROMPT_VERSION) {
+        merged.systemPrompt  = defaultConfig.systemPrompt;
+        merged.promptVersion = PROMPT_VERSION;
+        saveConfig(merged);
+        console.log(`Config migrated to prompt version ${PROMPT_VERSION}.`);
+      }
+      return merged;
     } catch (e) {
       console.error('Failed to parse config.json, using defaults:', e);
       return defaultConfig;
