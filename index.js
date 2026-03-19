@@ -2,7 +2,8 @@ require('dotenv').config({ path: './config/.env' });
 const express    = require('express');
 const bodyParser = require('body-parser');
 const { startTelegramBot } = require('./src/telegram');
-const { queryLLM, parseResponse } = require('./src/llm');
+const { queryLLM, queryLLMLoop, parseResponse } = require('./src/llm');
+const { loadConfig } = require('./src/config');
 const queue   = require('./src/command-queue');
 const session = require('./src/session');
 
@@ -19,10 +20,18 @@ app.post('/chat', async (req, res) => {
 
   try {
     session.append(sessionId, 'user', message);
-    const { text, usage, model } = await queryLLM(session.get(sessionId));
-    const parsed = parseResponse(text);
-    session.append(sessionId, 'assistant', text);
+    const { text, usage, model, parsed, newMessages } = await queryLLMLoop(session.get(sessionId));
+    for (const msg of newMessages) session.append(sessionId, msg.role, msg.content);
     if (usage) session.addUsage(sessionId, usage.input, usage.output);
+
+    if (parsed.type === 'send_telegram') {
+      const cfg = loadConfig();
+      if (bot && cfg.telegramChatId) {
+        bot.telegram.sendMessage(cfg.telegramChatId, parsed.message)
+          .catch(err => console.error('Telegram send failed:', err.message));
+      }
+    }
+
     res.json({ ...parsed, model, usage: session.getUsage(sessionId) });
   } catch (err) {
     res.status(500).json({ error: err.message });

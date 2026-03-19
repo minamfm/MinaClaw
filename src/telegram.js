@@ -1,5 +1,5 @@
 const { Telegraf } = require('telegraf');
-const { queryLLM, parseResponse } = require('./llm');
+const { queryLLMLoop, parseResponse } = require('./llm');
 const { updateConfig } = require('./config');
 const { handleScheduling } = require('./scheduler');
 const { connectToChromeAndLearn } = require('./browser');
@@ -84,6 +84,9 @@ function startTelegramBot() {
     const text      = ctx.message.text;
     const sessionId = ctx.chat.id.toString();
 
+    // Persist the user's chat ID so the agent can message them proactively
+    updateConfig({ telegramChatId: ctx.chat.id });
+
     if (text.toLowerCase().includes('remind me')) {
       const scheduled = await handleScheduling(text, ctx);
       if (scheduled) return;
@@ -92,11 +95,14 @@ function startTelegramBot() {
     ctx.sendChatAction('typing');
     const typingInterval = setInterval(() => ctx.sendChatAction('typing'), 4000);
     session.append(sessionId, 'user', text);
-    const { text: llmText, usage } = await queryLLM(session.get(sessionId));
+    const { text: llmText, usage, parsed, newMessages } = await queryLLMLoop(session.get(sessionId));
     clearInterval(typingInterval);
-    session.append(sessionId, 'assistant', llmText);
+    for (const msg of newMessages) session.append(sessionId, msg.role, msg.content);
     if (usage) session.addUsage(sessionId, usage.input, usage.output);
-    const parsed = parseResponse(llmText);
+
+    if (parsed.type === 'send_telegram') {
+      return ctx.reply(parsed.message);
+    }
 
     if (parsed.type === 'command_proposal') {
       const id = queue.enqueue(ctx.chat.id, parsed.command, parsed.explanation);

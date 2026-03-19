@@ -8,11 +8,10 @@ services:
     volumes:
       - ./config:/app/config
       - ./skills:/app/skills
-      - >-
-        /home/mina-morgan/minaclaw/~/smart_dashboard/smart-dashboard:/mnt/safe/smart-dashboard
+      - /home/mina-morgan/home_dashboard/home-dashboard:/mnt/safe/home-dashboard
     env_file:
       - ./config/.env
     environment:
       - NODE_ENV=production
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - host.docker.internal:host-gateway

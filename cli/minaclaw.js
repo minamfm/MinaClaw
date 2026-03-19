@@ -78,6 +78,7 @@ function saveConfig(config) {
 
 const green  = s => `\x1b[32m${s}\x1b[0m`;
 const yellow = s => `\x1b[33m${s}\x1b[0m`;
+const red    = s => `\x1b[31m${s}\x1b[0m`;
 const cyan   = s => `\x1b[36m${s}\x1b[0m`;
 const dim    = s => `\x1b[2m${s}\x1b[0m`;
 const bold   = s => `\x1b[1m${s}\x1b[0m`;
@@ -659,56 +660,177 @@ async function watchMode() {
 
 // ─── Safe Folders ─────────────────────────────────────────────────────────────
 
+async function browseForDirectory(startPath) {
+  let current = path.resolve(startPath || process.env.HOME || '/');
+
+  while (true) {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true })
+        .filter(e => e.isDirectory())
+        .sort((a, b) => {
+          // non-hidden dirs first, then alphabetical within each group
+          const aHidden = a.name.startsWith('.');
+          const bHidden = b.name.startsWith('.');
+          if (aHidden !== bHidden) return aHidden ? 1 : -1;
+          return a.name.localeCompare(b.name);
+        });
+    } catch {
+      current = path.dirname(current);
+      continue;
+    }
+
+    const choices = [
+      { name: green('✓  Select this directory'), value: '__select__' },
+      new inquirer.Separator(dim(`  ${current}`)),
+    ];
+
+    if (current !== '/') {
+      choices.push({ name: dim('↑  ..'), value: '__up__' });
+    }
+
+    entries.forEach(e => {
+      choices.push({
+        name: e.name.startsWith('.') ? dim(e.name + '/') : (e.name + '/'),
+        value: e.name,
+      });
+    });
+
+    if (entries.length === 0) {
+      choices.push(new inquirer.Separator(dim('  (no subdirectories)')));
+    }
+
+    choices.push(new inquirer.Separator());
+    choices.push({ name: '✕  Cancel', value: '__cancel__' });
+
+    const { selected } = await inquirer.prompt([{
+      type: 'list',
+      name: 'selected',
+      message: 'Navigate to directory:',
+      choices,
+      pageSize: 18,
+    }]);
+
+    if (selected === '__select__') return current;
+    if (selected === '__cancel__') return null;
+    if (selected === '__up__') { current = path.dirname(current); continue; }
+
+    const next = path.join(current, selected);
+    try {
+      fs.accessSync(next, fs.constants.R_OK);
+      current = next;
+    } catch {
+      console.log(yellow(`\n  Cannot access "${selected}" — permission denied.\n`));
+    }
+  }
+}
+
 async function manageSafeFolders() {
   if (!fs.existsSync(COMPOSE_FILE)) {
     console.error('docker-compose.yml not found.');
     return;
   }
-  const doc = yaml.load(fs.readFileSync(COMPOSE_FILE, 'utf8'));
-  const volumes = doc.services.minaclaw.volumes || [];
-  const safeMounts = volumes.filter(v => typeof v === 'string' && v.includes('/mnt/safe'));
 
-  const { action } = await inquirer.prompt([{
-    type: 'list',
-    name: 'action',
-    message: `Safe Folders  ${cyan(safeMounts.length + ' mount(s) active')}`,
-    choices: [
-      { name: 'List Folders', value: 'list' },
-      { name: 'Add Folder',   value: 'add'  },
-      {
-        name: safeMounts.length ? 'Remove Folder' : `Remove Folder  ${dim('(none to remove)')}`,
-        value: 'remove',
-      },
-      new inquirer.Separator(),
-      { name: '← Back', value: 'back' },
-    ],
-  }]);
+  while (true) {
+    const doc = yaml.load(fs.readFileSync(COMPOSE_FILE, 'utf8'));
+    const volumes = doc.services.minaclaw.volumes || [];
+    const safeMounts = volumes.filter(v => typeof v === 'string' && v.includes('/mnt/safe'));
 
-  if (action === 'back') return;
+    const choices = [];
 
-  if (action === 'list') {
-    if (!safeMounts.length) { console.log('\nNo safe folders configured.'); return; }
-    console.log('\nActive mounts:');
-    safeMounts.forEach(v => console.log(`  ${v}`));
+    if (safeMounts.length > 0) {
+      safeMounts.forEach(mount => {
+        const [hostPath, containerPath] = mount.split(':');
+        const alias = path.basename(containerPath);
+        choices.push({
+          name: `${cyan(alias.padEnd(22))} ${dim(hostPath)}`,
+          value: mount,
+        });
+      });
+      choices.push(new inquirer.Separator());
+    }
 
-  } else if (action === 'add') {
-    const { hostPath } = await inquirer.prompt([{ name: 'hostPath', message: 'Host path to mount:' }]);
-    const resolved = path.resolve(hostPath);
-    doc.services.minaclaw.volumes = [...volumes, `${resolved}:/mnt/safe/${path.basename(resolved)}`];
-    fs.writeFileSync(COMPOSE_FILE, yaml.dump(doc));
-    console.log(`✓ Added. Restart daemon to apply.`);
+    choices.push({ name: '+ Add Folder', value: '__add__' });
+    choices.push(new inquirer.Separator());
+    choices.push({ name: '← Back',       value: '__back__' });
 
-  } else if (action === 'remove') {
-    if (!safeMounts.length) { console.log('Nothing to remove.'); return; }
-    const { toRemove } = await inquirer.prompt([{
+    const { selected } = await inquirer.prompt([{
       type: 'list',
-      name: 'toRemove',
-      message: 'Select mount to remove:',
-      choices: safeMounts,
+      name: 'selected',
+      message: `Safe Folders  ${cyan(safeMounts.length + ' mount(s) active')}`,
+      choices,
+      pageSize: 20,
     }]);
-    doc.services.minaclaw.volumes = volumes.filter(v => v !== toRemove);
-    fs.writeFileSync(COMPOSE_FILE, yaml.dump(doc));
-    console.log('✓ Removed. Restart daemon to apply.');
+
+    if (selected === '__back__') return;
+
+    if (selected === '__add__') {
+      console.log('');
+      const hostPath = await browseForDirectory();
+      if (!hostPath) { console.log(dim('\n  Cancelled.\n')); continue; }
+
+      if (volumes.some(v => typeof v === 'string' && v.startsWith(hostPath + ':'))) {
+        console.log(yellow(`\n  "${hostPath}" is already a safe folder.\n`));
+        continue;
+      }
+
+      const { alias } = await inquirer.prompt([{
+        name: 'alias',
+        message: 'Mount alias (name inside /mnt/safe/):',
+        default: path.basename(hostPath),
+      }]);
+
+      doc.services.minaclaw.volumes = [...volumes, `${hostPath}:/mnt/safe/${alias}`];
+      fs.writeFileSync(COMPOSE_FILE, yaml.dump(doc));
+      console.log(green(`\n  ✓ Added "${hostPath}" as /mnt/safe/${alias}. Restart daemon to apply.\n`));
+      continue;
+    }
+
+    // An existing mount was selected — show action submenu
+    const [hostPath, containerPath] = selected.split(':');
+    const alias = path.basename(containerPath);
+
+    const { action } = await inquirer.prompt([{
+      type: 'list',
+      name: 'action',
+      message: `${cyan(alias)}  ${dim(hostPath)}`,
+      choices: [
+        { name: 'Rename alias', value: 'rename' },
+        { name: red('Delete'),  value: 'delete' },
+        new inquirer.Separator(),
+        { name: '← Back',       value: 'back' },
+      ],
+    }]);
+
+    if (action === 'back') continue;
+
+    if (action === 'delete') {
+      const { confirm } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'confirm',
+        message: `Remove "${alias}" (${hostPath})?`,
+        default: false,
+      }]);
+      if (confirm) {
+        doc.services.minaclaw.volumes = volumes.filter(v => v !== selected);
+        fs.writeFileSync(COMPOSE_FILE, yaml.dump(doc));
+        console.log(green('\n  ✓ Removed. Restart daemon to apply.\n'));
+      } else {
+        console.log(dim('\n  Cancelled.\n'));
+      }
+    }
+
+    if (action === 'rename') {
+      const { newAlias } = await inquirer.prompt([{
+        name: 'newAlias',
+        message: 'New alias name:',
+        default: alias,
+      }]);
+      const newMount = `${hostPath}:/mnt/safe/${newAlias}`;
+      doc.services.minaclaw.volumes = volumes.map(v => v === selected ? newMount : v);
+      fs.writeFileSync(COMPOSE_FILE, yaml.dump(doc));
+      console.log(green(`\n  ✓ Renamed to "${newAlias}". Restart daemon to apply.\n`));
+    }
   }
 }
 

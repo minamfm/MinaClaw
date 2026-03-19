@@ -4,6 +4,7 @@ const { GoogleGenAI } = require('@google/genai');
 const axios = require('axios');
 const { loadConfig } = require('./config');
 const { loadMemoryContext, extractMemoryTags, appendMemory, replaceIdentity } = require('./memory');
+const { executeShellCommand } = require('./tools');
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -35,14 +36,18 @@ function parseResponse(text) {
     try {
       const json = JSON.parse(cleaned);
       if (json.type === 'command_proposal' && json.command) return json;
+      if (json.type === 'internal_exec'    && json.command) return json;
+      if (json.type === 'send_telegram'    && json.message) return json;
     } catch { /* fall through */ }
   }
   // 2. Search anywhere in the text — handles preamble/postamble the model added
-  const match = text.match(/\{[\s\S]*?"type"\s*:\s*"command_proposal"[\s\S]*?\}/);
+  const match = text.match(/\{[\s\S]*?"type"\s*:\s*"(?:command_proposal|internal_exec|send_telegram)"[\s\S]*?\}/);
   if (match) {
     try {
       const json = JSON.parse(match[0]);
       if (json.type === 'command_proposal' && json.command) return json;
+      if (json.type === 'internal_exec'    && json.command) return json;
+      if (json.type === 'send_telegram'    && json.message) return json;
     } catch { /* fall through */ }
   }
   return { type: 'text', response: text };
@@ -183,4 +188,55 @@ async function queryOllama(messages, model) {
   }
 }
 
-module.exports = { queryLLM, parseResponse };
+/**
+ * Wraps queryLLM with an internal_exec tool loop.
+ * When the LLM responds with {"type":"internal_exec","command":"..."}, the command
+ * is executed inside the container immediately (no user approval), and its output
+ * is fed back to the LLM so it can continue. Loops up to MAX_STEPS times.
+ *
+ * Returns { text, usage, model, parsed, newMessages } where newMessages contains
+ * all intermediate + final assistant messages (and tool output user messages) to
+ * be appended to the session by the caller.
+ */
+async function queryLLMLoop(messages) {
+  const MAX_STEPS = 8;
+  let msgs = [...messages];
+  const newMessages = [];
+  let totalUsage = null;
+  let lastModel  = '';
+
+  for (let i = 0; i < MAX_STEPS; i++) {
+    const result = await queryLLM(msgs);
+    lastModel = result.model;
+    if (result.usage) {
+      if (!totalUsage) totalUsage = { input: 0, output: 0 };
+      totalUsage.input  += result.usage.input;
+      totalUsage.output += result.usage.output;
+    }
+
+    const parsed = parseResponse(result.text);
+
+    if (parsed.type !== 'internal_exec') {
+      newMessages.push({ role: 'assistant', content: result.text });
+      return { text: result.text, usage: totalUsage, model: lastModel, parsed, newMessages };
+    }
+
+    // Execute inside the container — no user approval required
+    console.log(`[internal_exec] ${parsed.command}`);
+    const output = await executeShellCommand(parsed.command);
+    const outputMsg = `\`${parsed.command}\` output:\n\`\`\`\n${output}\n\`\`\``;
+
+    newMessages.push({ role: 'assistant', content: result.text });
+    newMessages.push({ role: 'user',      content: outputMsg });
+    msgs = [...msgs,
+      { role: 'assistant', content: result.text },
+      { role: 'user',      content: outputMsg },
+    ];
+  }
+
+  const fallback = 'I ran too many internal commands trying to answer that. Please ask me to continue.';
+  newMessages.push({ role: 'assistant', content: fallback });
+  return { text: fallback, usage: totalUsage, model: lastModel, parsed: { type: 'text', response: fallback }, newMessages };
+}
+
+module.exports = { queryLLM, queryLLMLoop, parseResponse };
