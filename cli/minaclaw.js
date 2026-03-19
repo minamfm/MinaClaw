@@ -655,9 +655,14 @@ async function manageSafeFolders() {
 // ─── Daemon ───────────────────────────────────────────────────────────────────
 
 function restartDaemon() {
+  const cwd = path.join(__dirname, '..');
+  console.log('Stopping existing daemon (if running)...');
+  try {
+    execSync('docker compose down', { stdio: 'inherit', cwd });
+  } catch { /* not running — that's fine */ }
   console.log('Building and starting MinaClaw daemon...');
   try {
-    execSync('docker compose up -d --build', { stdio: 'inherit', cwd: path.join(__dirname, '..') });
+    execSync('docker compose up -d --build', { stdio: 'inherit', cwd });
     console.log('✓ Daemon is running.');
   } catch (e) {
     console.error('Failed to start daemon:', e.message);
