@@ -134,7 +134,11 @@ async function queryGemini(messages, model) {
 async function queryOllama(messages, model) {
   const url = process.env.OLLAMA_URL || 'http://host.docker.internal:11434';
   try {
-    const response = await axios.post(`${url}/api/chat`, { model, messages, stream: false });
+    const response = await axios.post(
+      `${url}/api/chat`,
+      { model, messages, stream: false, think: false },
+      { timeout: 120_000 },
+    );
     return response.data.message.content;
   } catch (err) {
     if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
