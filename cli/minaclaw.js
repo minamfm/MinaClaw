@@ -431,8 +431,10 @@ async function configureKimi() {
 async function configureOllama() {
   const env = loadEnv();
   const config = loadConfig();
-  const currentUrl = env.OLLAMA_URL || 'http://localhost:11434';
+  const currentUrl = env.OLLAMA_URL || 'http://host.docker.internal:11434';
   console.log('\nOllama (Local) — no API key required');
+  console.log(dim('  Tip: the agent runs inside Docker — use host.docker.internal instead of localhost'));
+  console.log(dim('       e.g. http://host.docker.internal:11434\n'));
 
   const { url } = await inquirer.prompt([{
     name: 'url',
@@ -551,7 +553,7 @@ async function chatSession() {
         console.log(`\nMinaClaw: ${data.response}\n`);
       }
     } catch {
-      console.error('Cannot reach daemon on localhost:3000. Is it running? Use "Restart Daemon" from the menu.');
+      console.error('Cannot reach daemon on localhost:6192. Is it running? Use "Restart Daemon" from the menu.');
       break;
     }
   }
