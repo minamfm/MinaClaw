@@ -542,6 +542,16 @@ async function handleDaemonResponse(data) {
     await handleDaemonResponse(followUp.data);
   } else {
     console.log(`\nMinaClaw: ${data.response || data.error || JSON.stringify(data)}\n`);
+    if (data.model || data.usage) {
+      const fmt   = n => (n || 0).toLocaleString();
+      const model = data.model  ? data.model : '';
+      const u     = data.usage  || {};
+      const tokens = (u.input !== undefined)
+        ? `↑ ${fmt(u.input)} in  ↓ ${fmt(u.output)} out`
+        : '';
+      const parts = [model, tokens].filter(Boolean);
+      if (parts.length) console.log(dim(`  ${parts.join('   ')}\n`));
+    }
   }
 }
 

@@ -91,9 +91,10 @@ function startTelegramBot() {
 
     ctx.sendChatAction('typing');
     session.append(sessionId, 'user', text);
-    const raw    = await queryLLM(session.get(sessionId));
-    session.append(sessionId, 'assistant', raw);
-    const parsed = parseResponse(raw);
+    const { text: llmText, usage } = await queryLLM(session.get(sessionId));
+    session.append(sessionId, 'assistant', llmText);
+    if (usage) session.addUsage(sessionId, usage.input, usage.output);
+    const parsed = parseResponse(llmText);
 
     if (parsed.type === 'command_proposal') {
       const id = queue.enqueue(ctx.chat.id, parsed.command, parsed.explanation);

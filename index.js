@@ -19,10 +19,11 @@ app.post('/chat', async (req, res) => {
 
   try {
     session.append(sessionId, 'user', message);
-    const raw    = await queryLLM(session.get(sessionId));
-    const parsed = parseResponse(raw);
-    session.append(sessionId, 'assistant', raw);
-    res.json(parsed);
+    const { text, usage, model } = await queryLLM(session.get(sessionId));
+    const parsed = parseResponse(text);
+    session.append(sessionId, 'assistant', text);
+    if (usage) session.addUsage(sessionId, usage.input, usage.output);
+    res.json({ ...parsed, model, usage: session.getUsage(sessionId) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -46,10 +47,11 @@ app.post('/command-result', async (req, res) => {
 
   let reply;
   try {
-    const raw    = await queryLLM(session.get(sessionId));
-    const parsed = parseResponse(raw);
-    session.append(sessionId, 'assistant', raw);
-    reply = parsed.response || raw;
+    const { text, usage } = await queryLLM(session.get(sessionId));
+    const parsed = parseResponse(text);
+    session.append(sessionId, 'assistant', text);
+    if (usage) session.addUsage(sessionId, usage.input, usage.output);
+    reply = parsed.response || text;
   } catch {
     reply = `Command finished.\n\`\`\`\n${output}\n\`\`\``;
   }

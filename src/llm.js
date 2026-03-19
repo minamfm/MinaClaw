@@ -48,10 +48,11 @@ function parseResponse(text) {
   return { type: 'text', response: text };
 }
 
+// Returns { text, usage: { input, output } | null, model }
 async function queryLLM(messages) {
-  const config     = loadConfig();
+  const config      = loadConfig();
   const activeModel = config.activeModel;
-  const modelName  = (config.models && config.models[activeModel]) || activeModel;
+  const modelName   = (config.models && config.models[activeModel]) || activeModel;
 
   // Inject persistent memory into the system prompt on every call
   const memoryContext = loadMemoryContext();
@@ -64,49 +65,61 @@ async function queryLLM(messages) {
     ...messages,
   ];
 
-  let raw;
+  let result; // { raw, usage }
   try {
     switch (activeModel) {
-      case 'openai':    raw = await queryOpenAI(fullMessages, modelName);               break;
-      case 'kimi':      raw = await queryKimi(fullMessages, modelName);                 break;
-      case 'gemini':    raw = await queryGemini(fullMessages, modelName);               break;
-      case 'ollama':    raw = await queryOllama(fullMessages, modelName);               break;
-      case 'anthropic': raw = await queryAnthropic(fullMessages, modelName, sysPrompt); break;
-      case 'mistral':   raw = await queryMistral(fullMessages, modelName);              break;
-      case 'grok':      raw = await queryGrok(fullMessages, modelName);                 break;
+      case 'openai':    result = await queryOpenAI(fullMessages, modelName);               break;
+      case 'kimi':      result = await queryKimi(fullMessages, modelName);                 break;
+      case 'gemini':    result = await queryGemini(fullMessages, modelName);               break;
+      case 'ollama':    result = await queryOllama(fullMessages, modelName);               break;
+      case 'anthropic': result = await queryAnthropic(fullMessages, modelName, sysPrompt); break;
+      case 'mistral':   result = await queryMistral(fullMessages, modelName);              break;
+      case 'grok':      result = await queryGrok(fullMessages, modelName);                 break;
       default:          throw new Error(`Unknown provider: ${activeModel}`);
     }
   } catch (err) {
     console.error(`LLM Error (${activeModel}/${modelName}):`, err);
-    return `Error communicating with ${activeModel}: ${err.message}`;
+    return { text: `Error communicating with ${activeModel}: ${err.message}`, usage: null, model: modelName };
   }
 
   // Strip memory tags before the response reaches any caller; persist them silently
-  const { cleanText, remember, identity } = extractMemoryTags(raw);
+  const { cleanText, remember, identity } = extractMemoryTags(result.raw);
   if (remember) appendMemory(remember).catch(e => console.error('Memory write failed:', e));
   if (identity) replaceIdentity(identity).catch(e => console.error('Identity write failed:', e));
 
-  return cleanText;
+  return { text: cleanText, usage: result.usage, model: modelName };
 }
 
 async function queryOpenAI(messages, model) {
   const response = await openai.chat.completions.create({ model, messages });
-  return response.choices[0].message.content;
+  return {
+    raw:   response.choices[0].message.content,
+    usage: { input: response.usage.prompt_tokens, output: response.usage.completion_tokens },
+  };
 }
 
 async function queryKimi(messages, model) {
   const response = await kimi.chat.completions.create({ model, messages });
-  return response.choices[0].message.content;
+  return {
+    raw:   response.choices[0].message.content,
+    usage: { input: response.usage.prompt_tokens, output: response.usage.completion_tokens },
+  };
 }
 
 async function queryMistral(messages, model) {
   const response = await mistral.chat.completions.create({ model, messages });
-  return response.choices[0].message.content;
+  return {
+    raw:   response.choices[0].message.content,
+    usage: { input: response.usage.prompt_tokens, output: response.usage.completion_tokens },
+  };
 }
 
 async function queryGrok(messages, model) {
   const response = await grok.chat.completions.create({ model, messages });
-  return response.choices[0].message.content;
+  return {
+    raw:   response.choices[0].message.content,
+    usage: { input: response.usage.prompt_tokens, output: response.usage.completion_tokens },
+  };
 }
 
 async function queryAnthropic(messages, model, sysPrompt) {
@@ -118,7 +131,10 @@ async function queryAnthropic(messages, model, sysPrompt) {
     system: sysPrompt,
     messages: chatMessages,
   });
-  return response.content[0].text;
+  return {
+    raw:   response.content[0].text,
+    usage: { input: response.usage.input_tokens, output: response.usage.output_tokens },
+  };
 }
 
 async function queryGemini(messages, model) {
@@ -128,7 +144,11 @@ async function queryGemini(messages, model) {
     parts: [{ text: m.content }],
   }));
   const response = await gemini.models.generateContent({ model, contents });
-  return response.text;
+  const meta = response.usageMetadata;
+  return {
+    raw:   response.text,
+    usage: meta ? { input: meta.promptTokenCount, output: meta.candidatesTokenCount } : null,
+  };
 }
 
 async function queryOllama(messages, model) {
@@ -139,16 +159,25 @@ async function queryOllama(messages, model) {
       { model, messages, stream: false, think: false },
       { timeout: 120_000 },
     );
-    return response.data.message.content;
+    return {
+      raw:   response.data.message.content,
+      usage: {
+        input:  response.data.prompt_eval_count || 0,
+        output: response.data.eval_count        || 0,
+      },
+    };
   } catch (err) {
     if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
       // Ollama is likely bound to 127.0.0.1 only and can't be reached from Docker.
       // Return a self-healing command proposal so the user can fix it with one click.
-      return JSON.stringify({
-        type: 'command_proposal',
-        explanation: `Ollama isn't reachable at ${url}. It's bound to 127.0.0.1 only and can't be reached from inside the agent container. This command reconfigures Ollama to accept connections from Docker and restarts it.`,
-        command: `sudo mkdir -p /etc/systemd/system/ollama.service.d && printf '[Service]\\nEnvironment="OLLAMA_HOST=0.0.0.0"\\n' | sudo tee /etc/systemd/system/ollama.service.d/override.conf && sudo systemctl daemon-reload && sudo systemctl restart ollama`,
-      });
+      return {
+        raw: JSON.stringify({
+          type: 'command_proposal',
+          explanation: `Ollama isn't reachable at ${url}. It's bound to 127.0.0.1 only and can't be reached from inside the agent container. This command reconfigures Ollama to accept connections from Docker and restarts it.`,
+          command: `sudo mkdir -p /etc/systemd/system/ollama.service.d && printf '[Service]\\nEnvironment="OLLAMA_HOST=0.0.0.0"\\n' | sudo tee /etc/systemd/system/ollama.service.d/override.conf && sudo systemctl daemon-reload && sudo systemctl restart ollama`,
+        }),
+        usage: null,
+      };
     }
     throw err;
   }

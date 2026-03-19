@@ -6,7 +6,8 @@
 
 const MAX_MESSAGES = 40; // 20 full back-and-forth exchanges
 
-const store = new Map();
+const store      = new Map();
+const tokenStore = new Map(); // sessionId -> { input: number, output: number }
 
 function get(sessionId) {
   if (!store.has(sessionId)) store.set(sessionId, []);
@@ -22,8 +23,18 @@ function append(sessionId, role, content) {
   }
 }
 
-function clear(sessionId) {
-  store.delete(sessionId);
+function addUsage(sessionId, input = 0, output = 0) {
+  const cur = tokenStore.get(sessionId) || { input: 0, output: 0 };
+  tokenStore.set(sessionId, { input: cur.input + input, output: cur.output + output });
 }
 
-module.exports = { get, append, clear };
+function getUsage(sessionId) {
+  return tokenStore.get(sessionId) || { input: 0, output: 0 };
+}
+
+function clear(sessionId) {
+  store.delete(sessionId);
+  tokenStore.delete(sessionId);
+}
+
+module.exports = { get, append, addUsage, getUsage, clear };
