@@ -4,7 +4,7 @@ services:
     container_name: minaclaw-daemon
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3000:3000" # Internal API for host CLI
+      - "127.0.0.1:6192:6192" # Internal API for host CLI
     volumes:
       - ./config:/app/config
       - ./skills:/app/skills

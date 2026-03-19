@@ -8,7 +8,7 @@ const axios = require('axios');
 const { execSync, exec } = require('child_process');
 const yaml = require('js-yaml');
 
-const DAEMON = 'http://localhost:3000';
+const DAEMON = 'http://localhost:6192';
 
 // If invoked as `minaclaw watch`, skip the menu and go straight to watch mode.
 if (process.argv[2] === 'watch') {
