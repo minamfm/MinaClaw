@@ -39,8 +39,8 @@ function loadMemoryContext() {
   if (!identity && !memory) return '';
 
   const parts = [];
-  if (identity) parts.push(`## Who You're Talking To\n${identity}`);
-  if (memory)   parts.push(`## Your Notes on This User\n${memory}`);
+  if (identity) parts.push(`## Identity & User Context\n${identity}`);
+  if (memory)   parts.push(`## Your Notes\n${memory}`);
 
   return parts.join('\n\n');
 }
