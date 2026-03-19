@@ -514,6 +514,37 @@ function executeOnHost(command) {
 
 // ─── Chat ─────────────────────────────────────────────────────────────────────
 
+// Recursively handle a daemon response — supports chained command proposals.
+async function handleDaemonResponse(data) {
+  if (data.type === 'command_proposal') {
+    console.log(`\n  ${yellow('Proposed command')}`);
+    console.log(`  Reason : ${data.explanation}`);
+    console.log(`  Command: ${cyan(data.command)}\n`);
+
+    const { confirm } = await inquirer.prompt([{
+      type: 'confirm',
+      name: 'confirm',
+      message: 'Execute this on your machine?',
+      default: false,
+    }]);
+
+    if (!confirm) { console.log(dim('  Command declined.\n')); return; }
+
+    console.log(dim('  Running…'));
+    const output = await executeOnHost(data.command);
+
+    // Brief pause so services restarted by the command have time to come up.
+    await new Promise(r => setTimeout(r, 2000));
+
+    const followUp = await axios.post(`${DAEMON}/chat`, {
+      message: `Command \`${data.command}\` finished. Output:\n\`\`\`\n${output}\n\`\`\``,
+    });
+    await handleDaemonResponse(followUp.data);
+  } else {
+    console.log(`\nMinaClaw: ${data.response || data.error || JSON.stringify(data)}\n`);
+  }
+}
+
 async function chatSession() {
   console.log('\n--- Chat Mode (type "exit" to return to menu) ---');
   while (true) {
@@ -522,36 +553,7 @@ async function chatSession() {
 
     try {
       const res = await axios.post(`${DAEMON}/chat`, { message });
-      const data = res.data;
-
-      if (data.type === 'command_proposal') {
-        console.log(`\n  ${yellow('Proposed command')}`);
-        console.log(`  Reason : ${data.explanation}`);
-        console.log(`  Command: ${cyan(data.command)}\n`);
-
-        const { confirm } = await inquirer.prompt([{
-          type: 'confirm',
-          name: 'confirm',
-          message: 'Execute this on your machine?',
-          default: false,
-        }]);
-
-        if (confirm) {
-          console.log(dim('  Running…'));
-          const output = await executeOnHost(data.command);
-
-          // Send the raw output to the daemon — the agent formulates the reply.
-          const followUp = await axios.post(`${DAEMON}/chat`, {
-            message: `Command \`${data.command}\` was executed. Output:\n\`\`\`\n${output}\n\`\`\``,
-          });
-          const summary = followUp.data.response || followUp.data;
-          console.log(`\nMinaClaw: ${summary}\n`);
-        } else {
-          console.log(dim('  Command declined.\n'));
-        }
-      } else {
-        console.log(`\nMinaClaw: ${data.response}\n`);
-      }
+      await handleDaemonResponse(res.data);
     } catch {
       console.error('Cannot reach daemon on localhost:6192. Is it running? Use "Restart Daemon" from the menu.');
       break;
