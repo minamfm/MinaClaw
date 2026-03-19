@@ -3,6 +3,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const { GoogleGenAI } = require('@google/genai');
 const axios = require('axios');
 const { loadConfig } = require('./config');
+const { loadMemoryContext, extractMemoryTags, appendMemory, replaceIdentity } = require('./memory');
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -27,16 +28,6 @@ const grok = new OpenAI({
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const gemini = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-// Injected ahead of the user-defined system prompt so every provider supports
-// command proposals without requiring manual system-prompt edits.
-const COMMAND_CAPABILITY = `\
-When the user's request would benefit from running a shell command on their system, \
-respond ONLY with a JSON object in this exact format — no markdown fences, no other text:
-{"type":"command_proposal","explanation":"one-sentence reason","command":"exact command to run"}
-The command will be shown to the user for approval before anything is executed. \
-Only propose a command when genuinely needed. For all other replies, respond normally as plain text.
-`;
-
 function parseResponse(text) {
   const trimmed = text.trim();
   // Strip optional ```json fences some models add
@@ -51,31 +42,44 @@ function parseResponse(text) {
 }
 
 async function queryLLM(messages) {
-  const config = loadConfig();
+  const config     = loadConfig();
   const activeModel = config.activeModel;
-  const sysPrompt = `${COMMAND_CAPABILITY}\n\n${config.systemPrompt}`;
-  const modelName = (config.models && config.models[activeModel]) || activeModel;
+  const modelName  = (config.models && config.models[activeModel]) || activeModel;
+
+  // Inject persistent memory into the system prompt on every call
+  const memoryContext = loadMemoryContext();
+  const sysPrompt = memoryContext
+    ? `${config.systemPrompt}\n\n---\n\n${memoryContext}`
+    : config.systemPrompt;
 
   const fullMessages = [
     { role: 'system', content: sysPrompt },
     ...messages,
   ];
 
+  let raw;
   try {
     switch (activeModel) {
-      case 'openai':    return await queryOpenAI(fullMessages, modelName);
-      case 'kimi':      return await queryKimi(fullMessages, modelName);
-      case 'gemini':    return await queryGemini(fullMessages, modelName);
-      case 'ollama':    return await queryOllama(fullMessages, modelName);
-      case 'anthropic': return await queryAnthropic(fullMessages, modelName, sysPrompt);
-      case 'mistral':   return await queryMistral(fullMessages, modelName);
-      case 'grok':      return await queryGrok(fullMessages, modelName);
+      case 'openai':    raw = await queryOpenAI(fullMessages, modelName);               break;
+      case 'kimi':      raw = await queryKimi(fullMessages, modelName);                 break;
+      case 'gemini':    raw = await queryGemini(fullMessages, modelName);               break;
+      case 'ollama':    raw = await queryOllama(fullMessages, modelName);               break;
+      case 'anthropic': raw = await queryAnthropic(fullMessages, modelName, sysPrompt); break;
+      case 'mistral':   raw = await queryMistral(fullMessages, modelName);              break;
+      case 'grok':      raw = await queryGrok(fullMessages, modelName);                 break;
       default:          throw new Error(`Unknown provider: ${activeModel}`);
     }
   } catch (err) {
     console.error(`LLM Error (${activeModel}/${modelName}):`, err);
     return `Error communicating with ${activeModel}: ${err.message}`;
   }
+
+  // Strip memory tags before the response reaches any caller; persist them silently
+  const { cleanText, remember, identity } = extractMemoryTags(raw);
+  if (remember) appendMemory(remember).catch(e => console.error('Memory write failed:', e));
+  if (identity) replaceIdentity(identity).catch(e => console.error('Identity write failed:', e));
+
+  return cleanText;
 }
 
 async function queryOpenAI(messages, model) {
