@@ -622,10 +622,23 @@ async function chatSession() {
     const { message } = await inquirer.prompt([{ name: 'message', message: '>' }]);
     if (message.toLowerCase() === 'exit') break;
 
+    // Progress indicator — dots every 3s, escalating message after 25s
+    process.stdout.write(dim('  Thinking'));
+    let elapsed = 0;
+    const progressInterval = setInterval(() => {
+      elapsed += 3;
+      process.stdout.write(dim('.'));
+      if (elapsed === 27) process.stdout.write(dim(' (still working, complex task…)'));
+    }, 3000);
+
     try {
       const res = await axios.post(`${DAEMON}/chat`, { message });
+      clearInterval(progressInterval);
+      process.stdout.write('\n');
       await handleDaemonResponse(res.data);
     } catch {
+      clearInterval(progressInterval);
+      process.stdout.write('\n');
       console.error('Cannot reach daemon on localhost:6192. Is it running? Use "Daemon Management" from the menu.');
       break;
     }

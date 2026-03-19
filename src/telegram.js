@@ -45,8 +45,9 @@ function startTelegramBot() {
     if (!relativePath) {
       return ctx.reply('Please specify a path relative to /mnt/safe.\ne.g., /learn_dir home-dashboard');
     }
-    ctx.reply(`📖 Reading source files in /mnt/safe/${relativePath}…`);
-    const result = await learnFromDirectory(relativePath);
+    await ctx.reply(`📖 Starting to read /mnt/safe/${relativePath}…`);
+    const onProgress = (msg) => ctx.reply(msg);
+    const result = await learnFromDirectory(relativePath, onProgress);
     return ctx.reply(result);
   });
 
@@ -118,9 +119,18 @@ function startTelegramBot() {
 
     ctx.sendChatAction('typing');
     const typingInterval = setInterval(() => ctx.sendChatAction('typing'), 4000);
+
+    // After 25s with no response, send a reassurance message so the user knows work is ongoing
+    let workingMsgSent = false;
+    const workingTimer = setTimeout(async () => {
+      workingMsgSent = true;
+      await ctx.reply('⏳ Still working on it, this is taking a moment…').catch(() => {});
+    }, 25_000);
+
     session.append(sessionId, 'user', text);
     const { text: llmText, usage, parsed, newMessages } = await queryLLMLoop(session.get(sessionId));
     clearInterval(typingInterval);
+    clearTimeout(workingTimer);
     for (const msg of newMessages) session.append(sessionId, msg.role, msg.content);
     if (usage) session.addUsage(sessionId, usage.input, usage.output);
 

@@ -65,7 +65,8 @@ Return only the Markdown content.
  *
  * @param {string} relativePath  Path relative to /mnt/safe, e.g. "home-dashboard"
  */
-async function learnFromDirectory(relativePath) {
+async function learnFromDirectory(relativePath, onProgress = null) {
+  const notify = (msg) => { if (onProgress) onProgress(msg).catch(() => {}); };
   const fullPath = `/mnt/safe/${relativePath.replace(/^\//, '')}`;
 
   // 1. Verify the directory exists
@@ -75,6 +76,7 @@ async function learnFromDirectory(relativePath) {
   }
 
   // 2. Discover source files (skip node_modules, dist, build, .git)
+  notify('🔍 Discovering source files…');
   const EXCLUDE = '! -path "*/node_modules/*" ! -path "*/.git/*" ! -path "*/dist/*" ! -path "*/build/*" ! -path "*/.next/*" ! -path "*/coverage/*"';
   const EXT = '\\( -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" -o -name "*.py" -o -name "*.go" -o -name "*.rs" -o -name "*.java" -o -name "*.rb" \\)';
   const fileList = await executeShellCommand(
@@ -87,6 +89,7 @@ async function learnFromDirectory(relativePath) {
   }
 
   // 3. Build reading context — prioritise config + likely API/route files
+  notify(`📂 Found ${files.length} source files — reading…`);
   let context = '';
   const MAX_CHARS = 20_000;
 
@@ -115,15 +118,17 @@ async function learnFromDirectory(relativePath) {
   for (const f of rest) await addFile(f);
 
   // 4. Ask LLM to generate the skill file
+  notify(`🧠 Analysing ${files.length} files and generating skill — this may take a minute…`);
   const prompt = `You are studying the following codebase to build a skill file for yourself.
 The codebase is mounted at ${fullPath} (accessible as /mnt/safe/${relativePath}).
+The application is also deployed at https://thespotstop.com — use that as the base URL for API examples.
 
 Write a comprehensive skill file in Markdown covering:
 - **Overview**: what the application does
-- **API Endpoints**: every endpoint found — HTTP method, path, parameters, request body, response format
+- **API Endpoints**: every endpoint found — HTTP method, path, parameters, request body, response format, example curl command using thespotstop.com
 - **Data models / schemas**: key types and their fields
 - **Authentication**: how auth works if present
-- **How to interact**: practical examples of calling the API, reading/writing files, etc.
+- **How to interact**: practical examples of calling the API
 - **Key patterns**: anything non-obvious about the codebase structure
 
 Be specific and concrete — include actual paths, field names, and values from the source.
