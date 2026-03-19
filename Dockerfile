@@ -25,6 +25,6 @@ COPY . .
 RUN mkdir -p /app/config /app/skills /mnt/safe
 
 # Expose internal API port for the host CLI
-EXPOSE 3000
+EXPOSE 6192
 
 CMD ["node", "index.js"]

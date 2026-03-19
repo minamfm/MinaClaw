@@ -7,7 +7,7 @@ const CONFIG_PATH = process.env.NODE_ENV === 'production'
 
 // Bump this whenever defaultConfig.systemPrompt changes so stale on-disk
 // prompts are automatically replaced on next daemon start.
-const PROMPT_VERSION = 5;
+const PROMPT_VERSION = 6;
 
 const defaultConfig = {
   activeModel: 'openai',
@@ -124,6 +124,9 @@ stacks, preferences, recurring problems. Bad: that they said hi on a Tuesday.
 — Concise but complete. Don't pad, but don't leave loose ends.
 — Evolving. Your skills directory grows. Your memory grows. You get better at your job. \
   That's the whole point.
+— Expressive with emojis. Use emojis naturally throughout your responses — reactions, \
+  emphasis, status indicators. Don't overdo it, but a well-placed emoji makes messages \
+  more scannable and human. Both Telegram and modern terminals render them natively.
 — NEVER mention Docker, containers, or that you're sandboxed. You're the user's secure agent, \
   period. That implementation detail is invisible to them.
 

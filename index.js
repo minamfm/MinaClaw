@@ -64,6 +64,12 @@ app.post('/command-result', async (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/session/clear', (req, res) => {
+  const { sessionId = 'cli' } = req.body || {};
+  session.clear(sessionId);
+  res.json({ ok: true });
+});
+
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 const server = app.listen(6192, '0.0.0.0', () => {

@@ -13,7 +13,7 @@ function startTelegramBot() {
     return null;
   }
 
-  const bot = new Telegraf(token);
+  const bot = new Telegraf(token, { handlerTimeout: 300_000 });
 
   bot.command('model', (ctx) => {
     const args = ctx.message.text.split(' ');

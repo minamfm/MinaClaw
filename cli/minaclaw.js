@@ -5,10 +5,12 @@ const inquirer = require('inquirer');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
-const { execSync, exec } = require('child_process');
+const { execSync, exec, spawn } = require('child_process');
 const yaml = require('js-yaml');
 
 const DAEMON = 'http://localhost:6192';
+const PROJECT_ROOT = path.join(__dirname, '..');
+const SKILLS_DIR = path.join(PROJECT_ROOT, 'skills');
 
 // If invoked as `minaclaw watch`, skip the menu and go straight to watch mode.
 if (process.argv[2] === 'watch') {
@@ -16,8 +18,8 @@ if (process.argv[2] === 'watch') {
   // watchMode() never resolves; process stays alive until Ctrl+C
 }
 
-const CONFIG_DIR = path.join(__dirname, '..', 'config');
-const COMPOSE_FILE = path.join(__dirname, '..', 'docker-compose.yml');
+const CONFIG_DIR = path.join(PROJECT_ROOT, 'config');
+const COMPOSE_FILE = path.join(PROJECT_ROOT, 'docker-compose.yml');
 const ENV_PATH = path.join(CONFIG_DIR, '.env');
 const CONFIG_JSON_PATH = path.join(CONFIG_DIR, 'config.json');
 
@@ -78,6 +80,7 @@ const green  = s => `\x1b[32m${s}\x1b[0m`;
 const yellow = s => `\x1b[33m${s}\x1b[0m`;
 const cyan   = s => `\x1b[36m${s}\x1b[0m`;
 const dim    = s => `\x1b[2m${s}\x1b[0m`;
+const bold   = s => `\x1b[1m${s}\x1b[0m`;
 
 function apiBadge(env, envKey, model) {
   return (env[envKey] && env[envKey].trim())
@@ -157,10 +160,14 @@ async function mainMenu() {
       choices: [
         { name: 'Chat with Agent',              value: 'chat' },
         { name: 'Watch (run Telegram commands)', value: 'watch' },
+        new inquirer.Separator('───────────────'),
         { name: 'Configure Providers & Model',  value: 'configure' },
+        { name: 'Daemon Management',            value: 'daemon' },
         { name: 'Manage Safe Folders',          value: 'folders' },
-        { name: 'Restart Daemon',               value: 'restart' },
-        new inquirer.Separator(),
+        new inquirer.Separator('───────────────'),
+        { name: 'Session & Memory',             value: 'session' },
+        { name: 'About MinaClaw',               value: 'about' },
+        new inquirer.Separator('───────────────'),
         { name: 'Exit',                         value: 'exit' },
       ],
     }]);
@@ -169,8 +176,10 @@ async function mainMenu() {
       case 'chat':      await chatSession(); break;
       case 'watch':     await watchMode(); break;
       case 'configure': await configureMenu(); break;
+      case 'daemon':    await daemonMenu(); break;
       case 'folders':   await manageSafeFolders(); break;
-      case 'restart':   restartDaemon(); break;
+      case 'session':   await sessionMenu(); break;
+      case 'about':     showAbout(); break;
       case 'exit':      process.exit(0);
     }
   }
@@ -429,28 +438,65 @@ async function configureKimi() {
 }
 
 async function configureOllama() {
-  const env = loadEnv();
   const config = loadConfig();
-  const currentUrl = env.OLLAMA_URL || 'http://host.docker.internal:11434';
+  const env = loadEnv();
   console.log('\nOllama (Local) — no API key required');
-  console.log(dim('  Tip: the agent runs inside Docker — use host.docker.internal instead of localhost'));
-  console.log(dim('       e.g. http://host.docker.internal:11434\n'));
 
-  const { url } = await inquirer.prompt([{
-    name: 'url',
-    message: 'Ollama URL:',
-    default: currentUrl,
-  }]);
-  if (url !== currentUrl) { env.OLLAMA_URL = url; saveEnv(env); }
+  // Try to discover models from the local Ollama instance
+  let ollamaModels = [];
+  try {
+    const res = await axios.get('http://localhost:11434/api/tags', { timeout: 5000 });
+    ollamaModels = (res.data.models || []);
+  } catch {
+    // Ollama not reachable — fall through to manual entry
+  }
 
-  const { modelInput } = await inquirer.prompt([{
-    name: 'modelInput',
-    message: 'Model name (e.g. llama3, mistral, codellama):',
-    default: config.models.ollama,
-  }]);
-  config.models.ollama = modelInput;
+  let selectedModel;
+
+  if (ollamaModels.length > 0) {
+    const choices = ollamaModels.map(m => {
+      const sizeGB = m.size ? (m.size / 1e9).toFixed(1) + ' GB' : '';
+      const params = m.details && m.details.parameter_size ? m.details.parameter_size : '';
+      const quant  = m.details && m.details.quantization_level ? m.details.quantization_level : '';
+      const meta   = [params, quant, sizeGB].filter(Boolean).join(', ');
+      return {
+        name: `${m.name}  ${dim(meta)}`,
+        value: m.name,
+      };
+    });
+    choices.push(new inquirer.Separator());
+    choices.push({ name: 'Enter model name manually...', value: '__manual__' });
+
+    const { model } = await inquirer.prompt([{
+      type: 'list',
+      name: 'model',
+      message: 'Select Ollama model:',
+      choices,
+      default: config.models.ollama,
+    }]);
+    selectedModel = model;
+  }
+
+  if (!ollamaModels.length || selectedModel === '__manual__') {
+    if (!ollamaModels.length) {
+      console.log(dim('  Could not reach Ollama at localhost:11434 — entering model name manually.\n'));
+    }
+    const { modelInput } = await inquirer.prompt([{
+      name: 'modelInput',
+      message: 'Model name (e.g. llama3, mistral, codellama):',
+      default: config.models.ollama,
+    }]);
+    selectedModel = modelInput;
+  }
+
+  config.models.ollama = selectedModel;
   saveConfig(config);
-  console.log(`✓ Ollama set to ${modelInput} at ${url}.`);
+
+  // Auto-save the daemon-reachable URL
+  env.OLLAMA_URL = 'http://host.docker.internal:11434';
+  saveEnv(env);
+
+  console.log(`✓ Ollama set to ${selectedModel}.`);
 }
 
 async function selectActiveModel() {
@@ -565,7 +611,7 @@ async function chatSession() {
       const res = await axios.post(`${DAEMON}/chat`, { message });
       await handleDaemonResponse(res.data);
     } catch {
-      console.error('Cannot reach daemon on localhost:6192. Is it running? Use "Restart Daemon" from the menu.');
+      console.error('Cannot reach daemon on localhost:6192. Is it running? Use "Daemon Management" from the menu.');
       break;
     }
   }
@@ -666,21 +712,234 @@ async function manageSafeFolders() {
   }
 }
 
-// ─── Daemon ───────────────────────────────────────────────────────────────────
+// ─── Daemon Management ───────────────────────────────────────────────────────
 
-function restartDaemon() {
-  const cwd = path.join(__dirname, '..');
-  console.log('Stopping existing daemon (if running)...');
+function runDockerCommand(description, command) {
+  return new Promise((resolve) => {
+    process.stdout.write(`  ${description}...`);
+    exec(command, { cwd: PROJECT_ROOT, timeout: 300000 }, (error, stdout, stderr) => {
+      if (error) {
+        console.log(` ${yellow('failed')}`);
+        // Extract meaningful error lines, filtering Docker WARNING noise
+        const lines = (stderr || error.message || '').split('\n')
+          .filter(l => !l.startsWith('WARNING') && l.trim())
+          .slice(-5);
+        if (lines.length) console.log(dim('  ' + lines.join('\n  ')));
+        resolve(false);
+      } else {
+        console.log(` ${green('done')}`);
+        resolve(true);
+      }
+    });
+  });
+}
+
+async function getDaemonStatus() {
   try {
-    execSync('docker compose down', { stdio: 'inherit', cwd });
-  } catch { /* not running — that's fine */ }
-  console.log('Building and starting MinaClaw daemon...');
-  try {
-    execSync('docker compose up -d --build', { stdio: 'inherit', cwd });
-    console.log('✓ Daemon is running.');
-  } catch (e) {
-    console.error('Failed to start daemon:', e.message);
+    const output = execSync(
+      'docker ps --filter name=minaclaw-daemon --format "{{.Status}}"',
+      { cwd: PROJECT_ROOT, encoding: 'utf8', timeout: 5000 }
+    ).trim();
+    if (output) return { running: true, status: output };
+  } catch { /* ignore */ }
+  return { running: false, status: '' };
+}
+
+async function daemonMenu() {
+  while (true) {
+    const { running, status } = await getDaemonStatus();
+    const badge = running
+      ? green(`● Running (${status})`)
+      : yellow('○ Stopped');
+
+    const { choice } = await inquirer.prompt([{
+      type: 'list',
+      name: 'choice',
+      message: `Daemon Management  ${badge}`,
+      choices: [
+        { name: 'Start Daemon',   value: 'start' },
+        { name: 'Stop Daemon',    value: 'stop' },
+        { name: 'Restart Daemon', value: 'restart' },
+        { name: 'Daemon Status',  value: 'status' },
+        { name: 'View Logs',      value: 'logs' },
+        new inquirer.Separator(),
+        { name: '← Back',         value: 'back' },
+      ],
+    }]);
+
+    if (choice === 'back') return;
+
+    switch (choice) {
+      case 'start': {
+        console.log('');
+        const built = await runDockerCommand('Building image', 'docker compose build --quiet');
+        if (built) {
+          await runDockerCommand('Starting container', 'docker compose up -d');
+        }
+        console.log('');
+        break;
+      }
+      case 'stop': {
+        console.log('');
+        await runDockerCommand('Stopping daemon', 'docker compose down');
+        console.log('');
+        break;
+      }
+      case 'restart': {
+        console.log('');
+        await runDockerCommand('Stopping daemon', 'docker compose down');
+        const built = await runDockerCommand('Building image', 'docker compose build --quiet');
+        if (built) {
+          await runDockerCommand('Starting container', 'docker compose up -d');
+        }
+        console.log('');
+        break;
+      }
+      case 'status': {
+        console.log('');
+        const st = await getDaemonStatus();
+        if (st.running) {
+          console.log(`  Container: ${green('● Running')}  ${dim(st.status)}`);
+          try {
+            const res = await axios.get(`${DAEMON}/health`, { timeout: 3000 });
+            console.log(`  Health:    ${green('● ' + res.data.status)}`);
+          } catch {
+            console.log(`  Health:    ${yellow('○ unreachable')}`);
+          }
+        } else {
+          console.log(`  Container: ${yellow('○ Stopped')}`);
+        }
+        console.log('');
+        break;
+      }
+      case 'logs': {
+        console.log(dim('\n  Streaming logs (Ctrl+C to stop)...\n'));
+        try {
+          const child = spawn('docker', ['compose', 'logs', '--tail', '30', '-f'], {
+            cwd: PROJECT_ROOT,
+            stdio: 'inherit',
+          });
+          await new Promise((resolve) => {
+            child.on('close', resolve);
+            child.on('error', resolve);
+          });
+        } catch { /* user exited */ }
+        console.log('');
+        break;
+      }
+    }
   }
+}
+
+// ─── Session & Memory ─────────────────────────────────────────────────────────
+
+async function sessionMenu() {
+  while (true) {
+    const { choice } = await inquirer.prompt([{
+      type: 'list',
+      name: 'choice',
+      message: 'Session & Memory',
+      choices: [
+        { name: 'View Session Info',    value: 'info' },
+        { name: 'Clear Chat Session',   value: 'clear' },
+        new inquirer.Separator(),
+        { name: 'View identity.md',     value: 'view_identity' },
+        { name: 'View memory.md',       value: 'view_memory' },
+        { name: 'Clear identity.md',    value: 'clear_identity' },
+        { name: 'Clear memory.md',      value: 'clear_memory' },
+        new inquirer.Separator(),
+        { name: '← Back',               value: 'back' },
+      ],
+    }]);
+
+    if (choice === 'back') return;
+
+    switch (choice) {
+      case 'info': {
+        const config = loadConfig();
+        const env = loadEnv();
+        console.log('');
+        console.log(`  Provider:       ${cyan(config.activeModel)}`);
+        console.log(`  Model:          ${config.models[config.activeModel]}`);
+        console.log(`  Prompt version: ${config.promptVersion || 'unknown'}`);
+        try {
+          await axios.get(`${DAEMON}/health`, { timeout: 3000 });
+          console.log(`  Daemon:         ${green('● reachable')}`);
+        } catch {
+          console.log(`  Daemon:         ${yellow('○ unreachable')}`);
+        }
+        console.log('');
+        break;
+      }
+      case 'clear': {
+        try {
+          await axios.post(`${DAEMON}/session/clear`, { sessionId: 'cli' });
+          console.log('✓ Chat session cleared.');
+        } catch {
+          console.log(yellow('Could not reach daemon — is it running?'));
+        }
+        break;
+      }
+      case 'view_identity': {
+        const filePath = path.join(SKILLS_DIR, 'identity.md');
+        if (fs.existsSync(filePath)) {
+          console.log(`\n${dim('─── identity.md ───')}`);
+          console.log(fs.readFileSync(filePath, 'utf8'));
+          console.log(dim('───────────────────\n'));
+        } else {
+          console.log(dim('  identity.md not found.\n'));
+        }
+        break;
+      }
+      case 'view_memory': {
+        const filePath = path.join(SKILLS_DIR, 'memory.md');
+        if (fs.existsSync(filePath)) {
+          console.log(`\n${dim('─── memory.md ───')}`);
+          console.log(fs.readFileSync(filePath, 'utf8'));
+          console.log(dim('─────────────────\n'));
+        } else {
+          console.log(dim('  memory.md not found.\n'));
+        }
+        break;
+      }
+      case 'clear_identity':
+      case 'clear_memory': {
+        const filename = choice === 'clear_identity' ? 'identity.md' : 'memory.md';
+        const filePath = path.join(SKILLS_DIR, filename);
+        const { confirm } = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'confirm',
+          message: `Clear ${filename}? This cannot be undone.`,
+          default: false,
+        }]);
+        if (confirm) {
+          fs.writeFileSync(filePath, '');
+          console.log(`✓ ${filename} cleared.`);
+        } else {
+          console.log('Cancelled.');
+        }
+        break;
+      }
+    }
+  }
+}
+
+// ─── About ────────────────────────────────────────────────────────────────────
+
+function showAbout() {
+  const pkg = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf8'));
+  const config = loadConfig();
+
+  console.log('');
+  console.log(`  ${bold('MinaClaw')} v${pkg.version}`);
+  console.log(`  Your personal AI agent — always on, always ready.`);
+  console.log('');
+  console.log(`  Provider:       ${cyan(config.activeModel)} ${dim('(' + config.models[config.activeModel] + ')')}`);
+  console.log(`  Prompt version: ${config.promptVersion || 'unknown'}`);
+  console.log(`  Daemon URL:     ${dim(DAEMON)}`);
+  console.log(`  Config dir:     ${dim(CONFIG_DIR)}`);
+  console.log(`  Skills dir:     ${dim(SKILLS_DIR)}`);
+  console.log('');
 }
 
 mainMenu().catch(console.error);
