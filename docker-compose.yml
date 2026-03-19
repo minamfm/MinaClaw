@@ -4,12 +4,12 @@ services:
     container_name: minaclaw-daemon
     restart: unless-stopped
     ports:
-      - "127.0.0.1:6192:6192" # Internal API for host CLI
+      - 127.0.0.1:6192:6192
     volumes:
       - ./config:/app/config
       - ./skills:/app/skills
-      # Dynamic safe mounts go here
-      # Example: - /home/user/safe_docs:/mnt/safe/docs
+      - >-
+        /home/mina-morgan/minaclaw/~/smart_dashboard/smart-dashboard:/mnt/safe/smart-dashboard
     env_file:
       - ./config/.env
     environment:

@@ -46,8 +46,13 @@ function loadMemoryContext() {
 }
 
 /**
- * Scans the raw LLM response for [REMEMBER: ...] and [IDENTITY: ...] tags.
- * Strips them from the text (they're for the agent's internal use, not the user).
+ * Scans the raw LLM response for XML-style memory tags and strips them.
+ * Using XML tags avoids the bracket-format bug where a ']' inside the content
+ * would prematurely close a [REMEMBER: ...] or [IDENTITY: ...] block.
+ *
+ *   <remember>note to append to memory.md</remember>
+ *   <identity>full replacement content for identity.md</identity>
+ *
  * Returns { cleanText, remember, identity }.
  */
 function extractMemoryTags(raw) {
@@ -55,19 +60,16 @@ function extractMemoryTags(raw) {
   let remember  = null;
   let identity  = null;
 
-  // [REMEMBER: ...] — can span multiple lines
-  cleanText = cleanText.replace(/\[REMEMBER:\s*([\s\S]*?)\]/g, (_, note) => {
+  cleanText = cleanText.replace(/<remember>([\s\S]*?)<\/remember>/gi, (_, note) => {
     remember = note.trim();
     return '';
   });
 
-  // [IDENTITY: ...] — can span multiple lines
-  cleanText = cleanText.replace(/\[IDENTITY:\s*([\s\S]*?)\]/g, (_, content) => {
+  cleanText = cleanText.replace(/<identity>([\s\S]*?)<\/identity>/gi, (_, content) => {
     identity = content.trim();
     return '';
   });
 
-  // Clean up any trailing blank lines left behind
   cleanText = cleanText.replace(/\n{3,}/g, '\n\n').trim();
 
   return { cleanText, remember, identity };

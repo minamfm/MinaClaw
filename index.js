@@ -1,23 +1,27 @@
 require('dotenv').config({ path: './config/.env' });
-const express = require('express');
+const express    = require('express');
 const bodyParser = require('body-parser');
 const { startTelegramBot } = require('./src/telegram');
 const { queryLLM, parseResponse } = require('./src/llm');
-const queue = require('./src/command-queue');
+const queue   = require('./src/command-queue');
+const session = require('./src/session');
 
-console.log('Starting MinaClaw Daemon in Docker...');
+console.log('Starting MinaClaw daemon…');
 
 const app = express();
 app.use(bodyParser.json());
 
-// Chat endpoint — returns either a normal response or a command_proposal object.
+// Chat endpoint — maintains per-session conversation history.
+// sessionId defaults to 'cli' for the host CLI; Telegram passes chatId.
 app.post('/chat', async (req, res) => {
-  const { message } = req.body;
+  const { message, sessionId = 'cli' } = req.body;
   if (!message) return res.status(400).send('Message is required.');
 
   try {
-    const raw = await queryLLM([{ role: 'user', content: message }]);
+    session.append(sessionId, 'user', message);
+    const raw    = await queryLLM(session.get(sessionId));
     const parsed = parseResponse(raw);
+    session.append(sessionId, 'assistant', raw);
     res.json(parsed);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -29,30 +33,30 @@ app.get('/pending-commands', (req, res) => {
   res.json(queue.dequeueAll());
 });
 
-// Host CLI watcher posts execution results here so the Telegram bot can reply.
+// Host CLI watcher posts execution results; agent summarises and Telegram bot replies.
 app.post('/command-result', async (req, res) => {
   const { chatId, output, command } = req.body;
-  if (!chatId || output === undefined) return res.status(400).send('chatId and output are required.');
+  if (!chatId || output === undefined)
+    return res.status(400).send('chatId and output are required.');
 
-  // Ask the LLM to summarise the result in a human-friendly way
+  const sessionId = chatId.toString();
+  // Inject the result into the session so the agent has full context
+  session.append(sessionId, 'user',
+    `Command \`${command}\` was executed on my machine. Output:\n\`\`\`\n${output}\n\`\`\``);
+
   let reply;
   try {
-    const raw = await queryLLM([{
-      role: 'user',
-      content: `The command \`${command}\` was executed on the user's host machine. Output:\n\`\`\`\n${output}\n\`\`\`\nSummarise the result helpfully and concisely.`,
-    }]);
+    const raw    = await queryLLM(session.get(sessionId));
     const parsed = parseResponse(raw);
+    session.append(sessionId, 'assistant', raw);
     reply = parsed.response || raw;
   } catch {
     reply = `Command finished.\n\`\`\`\n${output}\n\`\`\``;
   }
 
   if (bot) {
-    try {
-      await bot.telegram.sendMessage(chatId, reply);
-    } catch (err) {
-      console.error('Failed to send Telegram message:', err.message);
-    }
+    try { await bot.telegram.sendMessage(chatId, reply); }
+    catch (err) { console.error('Failed to send Telegram message:', err.message); }
   }
 
   res.json({ ok: true });
@@ -66,6 +70,4 @@ const server = app.listen(6192, '0.0.0.0', () => {
 
 const bot = startTelegramBot();
 
-if (!bot) {
-  console.log('MinaClaw is running in headless mode (No Telegram bot).');
-}
+if (!bot) console.log('Running in headless mode (no Telegram bot).');

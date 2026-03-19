@@ -29,12 +29,19 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const gemini = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 function parseResponse(text) {
-  const trimmed = text.trim();
-  // Strip optional ```json fences some models add
-  const cleaned = trimmed.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+  // 1. Clean fences and try the whole string (well-behaved models)
+  const cleaned = text.trim().replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
   if (cleaned.startsWith('{')) {
     try {
       const json = JSON.parse(cleaned);
+      if (json.type === 'command_proposal' && json.command) return json;
+    } catch { /* fall through */ }
+  }
+  // 2. Search anywhere in the text — handles preamble/postamble the model added
+  const match = text.match(/\{[\s\S]*?"type"\s*:\s*"command_proposal"[\s\S]*?\}/);
+  if (match) {
+    try {
+      const json = JSON.parse(match[0]);
       if (json.type === 'command_proposal' && json.command) return json;
     } catch { /* fall through */ }
   }

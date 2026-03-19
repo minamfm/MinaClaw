@@ -3,7 +3,8 @@ const { queryLLM, parseResponse } = require('./llm');
 const { updateConfig } = require('./config');
 const { handleScheduling } = require('./scheduler');
 const { connectToChromeAndLearn } = require('./browser');
-const queue = require('./command-queue');
+const queue   = require('./command-queue');
+const session = require('./session');
 
 function startTelegramBot() {
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -32,7 +33,7 @@ function startTelegramBot() {
     const args = ctx.message.text.split(' ');
     if (args.length > 1) {
       const url = args[1];
-      ctx.reply(`Connecting to Chrome to learn from ${url}...`);
+      ctx.reply(`Connecting to Chrome to learn from ${url}…`);
       const result = await connectToChromeAndLearn(url);
       return ctx.reply(result);
     }
@@ -43,13 +44,9 @@ function startTelegramBot() {
     const command = ctx.message.text.replace('/sh', '').trim();
     if (!command) return ctx.reply('Please provide a command. e.g., /sh ls -la');
 
-    // /sh proposes the command through the same approval flow
     const id = queue.enqueue(ctx.chat.id, command, 'Manually requested via /sh');
     return ctx.reply(
-      `📋 *Command proposal*\n\n` +
-      `_Reason:_ Manually requested via /sh\n` +
-      `\`\`\`\n${command}\n\`\`\`\n\n` +
-      `This will run on your host machine via the MinaClaw watcher.`,
+      `📋 *Command proposal*\n\n_Reason:_ Manually requested via /sh\n\`\`\`\n${command}\n\`\`\`\n\nThis will run on your host machine via the MinaClaw watcher.`,
       {
         parse_mode: 'Markdown',
         reply_markup: {
@@ -62,13 +59,12 @@ function startTelegramBot() {
     );
   });
 
-  // Inline keyboard responses
+  // Inline keyboard responses (approve / cancel command proposals)
   bot.on('callback_query', async (ctx) => {
     const data = ctx.callbackQuery.data || '';
     const [action, id] = data.split(':');
 
     if (action === 'approve') {
-      // Command stays in the queue; the host CLI watcher will pick it up
       await ctx.answerCbQuery('Queued — waiting for host watcher.');
       await ctx.editMessageText(
         ctx.callbackQuery.message.text + '\n\n⏳ _Approved — waiting for host CLI watcher to execute…_',
@@ -85,7 +81,8 @@ function startTelegramBot() {
   });
 
   bot.on('text', async (ctx) => {
-    const text = ctx.message.text;
+    const text      = ctx.message.text;
+    const sessionId = ctx.chat.id.toString();
 
     if (text.toLowerCase().includes('remind me')) {
       const scheduled = await handleScheduling(text, ctx);
@@ -93,16 +90,15 @@ function startTelegramBot() {
     }
 
     ctx.sendChatAction('typing');
-    const raw = await queryLLM([{ role: 'user', content: text }]);
+    session.append(sessionId, 'user', text);
+    const raw    = await queryLLM(session.get(sessionId));
+    session.append(sessionId, 'assistant', raw);
     const parsed = parseResponse(raw);
 
     if (parsed.type === 'command_proposal') {
       const id = queue.enqueue(ctx.chat.id, parsed.command, parsed.explanation);
       return ctx.reply(
-        `📋 *Command proposal*\n\n` +
-        `_Reason:_ ${parsed.explanation}\n` +
-        `\`\`\`\n${parsed.command}\n\`\`\`\n\n` +
-        `This will run on your host machine via the MinaClaw watcher.`,
+        `📋 *Command proposal*\n\n_Reason:_ ${parsed.explanation}\n\`\`\`\n${parsed.command}\n\`\`\`\n\nThis will run on your host machine via the MinaClaw watcher.`,
         {
           parse_mode: 'Markdown',
           reply_markup: {
