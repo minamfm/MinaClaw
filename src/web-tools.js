@@ -55,7 +55,7 @@ async function fetchUrl(url, method = 'GET', headers = {}, body = null) {
 
 /**
  * Searches the web and returns a text summary of top results.
- * Uses Brave Search API if BRAVE_API_KEY is set, otherwise DuckDuckGo instant answers.
+ * Priority: Brave Search → Google Custom Search → DuckDuckGo instant answers.
  */
 async function searchWeb(query) {
   if (process.env.BRAVE_API_KEY) {
@@ -78,6 +78,27 @@ async function searchWeb(query) {
     }
   }
 
+  if (process.env.GOOGLE_SEARCH_API_KEY && process.env.GOOGLE_SEARCH_CX) {
+    try {
+      const res = await axios.get('https://www.googleapis.com/customsearch/v1', {
+        params: {
+          key: process.env.GOOGLE_SEARCH_API_KEY,
+          cx:  process.env.GOOGLE_SEARCH_CX,
+          q:   query,
+          num: 6,
+        },
+        timeout: 10_000,
+      });
+      const items = res.data.items || [];
+      if (!items.length) return 'No results found.';
+      return items.map((r, i) =>
+        `${i + 1}. **${r.title}**\n   ${r.link}\n   ${r.snippet || ''}`
+      ).join('\n\n');
+    } catch (err) {
+      return `search_web (Google) error: ${err.message}`;
+    }
+  }
+
   // Fallback: DuckDuckGo Instant Answer API (free, limited to known entities)
   try {
     const res = await axios.get('https://api.duckduckgo.com/', {
@@ -94,7 +115,7 @@ async function searchWeb(query) {
         .join('\n');
     }
     if (!result.trim()) {
-      return `No instant answer found for "${query}". Set BRAVE_API_KEY in config/.env for full web search.`;
+      return `No instant answer found for "${query}". Configure BRAVE_API_KEY or GOOGLE_SEARCH_API_KEY in config/.env for full web search.`;
     }
     return result.trim().slice(0, 4000);
   } catch (err) {

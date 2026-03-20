@@ -239,7 +239,13 @@ async function configureMenu() {
         { name: 'System Prompt',  value: 'prompt' },
         new inquirer.Separator(),
         {
-          name: `Web Search       ${(env.BRAVE_API_KEY && env.BRAVE_API_KEY.trim()) ? green('● Brave Search') : yellow('○ DDG fallback (set key for full search)')}`,
+          name: `Web Search       ${
+            (env.BRAVE_API_KEY && env.BRAVE_API_KEY.trim())
+              ? green('● Brave Search')
+              : (env.GOOGLE_SEARCH_API_KEY && env.GOOGLE_SEARCH_CX)
+                ? green('● Google Search')
+                : yellow('○ DDG fallback (set a key for full search)')
+          }`,
           value: 'websearch',
         },
         new inquirer.Separator(),
@@ -266,22 +272,68 @@ async function configureMenu() {
 
 async function configureWebSearch() {
   const env = loadEnv();
-  const current = env.BRAVE_API_KEY;
-  console.log(`\nWeb Search — ${current ? green('Brave Search configured') : yellow('using DuckDuckGo fallback')}`);
-  console.log(dim('  Get a free key at https://api.search.brave.com (2000 queries/month free)\n'));
 
-  const { key } = await inquirer.prompt([{
-    type: 'password',
-    name: 'key',
-    message: 'Brave Search API key (leave blank to keep existing):',
-    mask: '*',
-  }]);
-  if (key) {
-    env.BRAVE_API_KEY = key;
-    saveEnv(env);
-    console.log('✓ Brave Search API key saved.');
-  } else {
-    console.log('No changes made.');
+  const activeProvider =
+    (env.BRAVE_API_KEY && env.BRAVE_API_KEY.trim())           ? 'Brave Search'
+    : (env.GOOGLE_SEARCH_API_KEY && env.GOOGLE_SEARCH_CX)    ? 'Google Search'
+    : 'DuckDuckGo (fallback)';
+
+  while (true) {
+    const { choice } = await inquirer.prompt([{
+      type: 'list',
+      name: 'choice',
+      message: `Web Search  ${dim('active: ' + activeProvider)}`,
+      choices: [
+        {
+          name: `Brave Search     ${(env.BRAVE_API_KEY && env.BRAVE_API_KEY.trim()) ? green('● configured') : yellow('○ not set')}  ${dim('2 000 req/month free')}`,
+          value: 'brave',
+        },
+        {
+          name: `Google Search    ${(env.GOOGLE_SEARCH_API_KEY && env.GOOGLE_SEARCH_CX) ? green('● configured') : yellow('○ not set')}  ${dim('100 req/day free')}`,
+          value: 'google',
+        },
+        new inquirer.Separator(),
+        { name: '← Back', value: 'back' },
+      ],
+    }]);
+
+    if (choice === 'back') return;
+
+    if (choice === 'brave') {
+      console.log(dim('\n  Get a free key at https://api.search.brave.com\n'));
+      const { key } = await inquirer.prompt([{
+        type: 'password',
+        name: 'key',
+        message: 'Brave Search API key (leave blank to keep existing):',
+        mask: '*',
+      }]);
+      if (key) { env.BRAVE_API_KEY = key; saveEnv(env); console.log('✓ Brave Search API key saved.\n'); }
+      else { console.log('No changes made.\n'); }
+    }
+
+    if (choice === 'google') {
+      console.log(dim('\n  Create a Custom Search Engine at https://programmablesearchengine.google.com'));
+      console.log(dim('  then enable the Custom Search API in Google Cloud Console.\n'));
+      const { apiKey } = await inquirer.prompt([{
+        type: 'password',
+        name: 'apiKey',
+        message: 'Google API key (leave blank to keep existing):',
+        mask: '*',
+      }]);
+      const { cx } = await inquirer.prompt([{
+        name: 'cx',
+        message: 'Search Engine ID (cx) (leave blank to keep existing):',
+        default: env.GOOGLE_SEARCH_CX || '',
+      }]);
+      if (apiKey) { env.GOOGLE_SEARCH_API_KEY = apiKey; }
+      if (cx && cx !== (env.GOOGLE_SEARCH_CX || '')) { env.GOOGLE_SEARCH_CX = cx; }
+      if (apiKey || (cx && cx !== (env.GOOGLE_SEARCH_CX || ''))) {
+        saveEnv(env);
+        console.log('✓ Google Search credentials saved.\n');
+      } else {
+        console.log('No changes made.\n');
+      }
+    }
   }
 }
 
