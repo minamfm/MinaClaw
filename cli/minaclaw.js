@@ -238,6 +238,11 @@ async function configureMenu() {
         },
         { name: 'System Prompt',  value: 'prompt' },
         new inquirer.Separator(),
+        {
+          name: `Web Search       ${(env.BRAVE_API_KEY && env.BRAVE_API_KEY.trim()) ? green('● Brave Search') : yellow('○ DDG fallback (set key for full search)')}`,
+          value: 'websearch',
+        },
+        new inquirer.Separator(),
         { name: '← Back',         value: 'back' },
       ],
     }]);
@@ -252,9 +257,31 @@ async function configureMenu() {
       case 'grok':      await configureGrok(); break;
       case 'kimi':      await configureKimi(); break;
       case 'ollama':    await configureOllama(); break;
-      case 'active':    await selectActiveModel(); break;
-      case 'prompt':    await editSystemPrompt(); break;
+      case 'active':     await selectActiveModel(); break;
+      case 'prompt':     await editSystemPrompt(); break;
+      case 'websearch':  await configureWebSearch(); break;
     }
+  }
+}
+
+async function configureWebSearch() {
+  const env = loadEnv();
+  const current = env.BRAVE_API_KEY;
+  console.log(`\nWeb Search — ${current ? green('Brave Search configured') : yellow('using DuckDuckGo fallback')}`);
+  console.log(dim('  Get a free key at https://api.search.brave.com (2000 queries/month free)\n'));
+
+  const { key } = await inquirer.prompt([{
+    type: 'password',
+    name: 'key',
+    message: 'Brave Search API key (leave blank to keep existing):',
+    mask: '*',
+  }]);
+  if (key) {
+    env.BRAVE_API_KEY = key;
+    saveEnv(env);
+    console.log('✓ Brave Search API key saved.');
+  } else {
+    console.log('No changes made.');
   }
 }
 

@@ -5,6 +5,7 @@ const axios = require('axios');
 const { loadConfig } = require('./config');
 const { loadMemoryContext, extractMemoryTags, appendMemory, replaceIdentity } = require('./memory');
 const { executeShellCommand } = require('./tools');
+const { fetchUrl, searchWeb } = require('./web-tools');
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -38,16 +39,21 @@ function parseResponse(text) {
       if (json.type === 'command_proposal' && json.command) return json;
       if (json.type === 'internal_exec'    && json.command) return json;
       if (json.type === 'send_telegram'    && json.message) return json;
+      if (json.type === 'fetch_url'        && json.url)     return json;
+      if (json.type === 'search_web'       && json.query)   return json;
     } catch { /* fall through */ }
   }
   // 2. Search anywhere in the text — handles preamble/postamble the model added
-  const match = text.match(/\{[\s\S]*?"type"\s*:\s*"(?:command_proposal|internal_exec|send_telegram)"[\s\S]*?\}/);
+  const TYPES = 'command_proposal|internal_exec|send_telegram|fetch_url|search_web';
+  const match = text.match(new RegExp(`\\{[\\s\\S]*?"type"\\s*:\\s*"(?:${TYPES})"[\\s\\S]*?\\}`));
   if (match) {
     try {
       const json = JSON.parse(match[0]);
       if (json.type === 'command_proposal' && json.command) return json;
       if (json.type === 'internal_exec'    && json.command) return json;
       if (json.type === 'send_telegram'    && json.message) return json;
+      if (json.type === 'fetch_url'        && json.url)     return json;
+      if (json.type === 'search_web'       && json.query)   return json;
     } catch { /* fall through */ }
   }
   return { type: 'text', response: text };
@@ -216,15 +222,29 @@ async function queryLLMLoop(messages) {
 
     const parsed = parseResponse(result.text);
 
-    if (parsed.type !== 'internal_exec') {
+    const TOOL_TYPES = ['internal_exec', 'fetch_url', 'search_web'];
+    if (!TOOL_TYPES.includes(parsed.type)) {
       newMessages.push({ role: 'assistant', content: result.text });
       return { text: result.text, usage: totalUsage, model: lastModel, parsed, newMessages };
     }
 
-    // Execute inside the container — no user approval required
-    console.log(`[internal_exec] ${parsed.command}`);
-    const output = await executeShellCommand(parsed.command);
-    const outputMsg = `\`${parsed.command}\` output:\n\`\`\`\n${output}\n\`\`\``;
+    // Execute tool — no user approval required for any of these
+    let output;
+    if (parsed.type === 'internal_exec') {
+      console.log(`[internal_exec] ${parsed.command}`);
+      output = await executeShellCommand(parsed.command);
+    } else if (parsed.type === 'fetch_url') {
+      console.log(`[fetch_url] ${parsed.method || 'GET'} ${parsed.url}`);
+      output = await fetchUrl(parsed.url, parsed.method, parsed.headers, parsed.body);
+    } else if (parsed.type === 'search_web') {
+      console.log(`[search_web] ${parsed.query}`);
+      output = await searchWeb(parsed.query);
+    }
+
+    const label = parsed.type === 'internal_exec' ? `\`${parsed.command}\``
+                : parsed.type === 'fetch_url'     ? `fetch ${parsed.url}`
+                : `search "${parsed.query}"`;
+    const outputMsg = `${label} result:\n\`\`\`\n${output}\n\`\`\``;
 
     newMessages.push({ role: 'assistant', content: result.text });
     newMessages.push({ role: 'user',      content: outputMsg });
