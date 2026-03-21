@@ -135,6 +135,7 @@ async function queryOpenAI(messages, model) {
     messages,
     tools: OPENAI_TOOLS,
     tool_choice: 'auto',
+    parallel_tool_calls: false, // one at a time — we loop, not batch
   });
 
   const choice = response.choices[0];
