@@ -940,6 +940,61 @@ async function manageSafeFolders() {
   }
 }
 
+// ─── Watcher service ──────────────────────────────────────────────────────────
+
+const SERVICE_NAME = 'minaclaw-watcher';
+const SERVICE_PATH = path.join(process.env.HOME || '/root', `.config/systemd/user/${SERVICE_NAME}.service`);
+const CLI_PATH     = path.resolve(__filename);
+
+function getWatcherStatus() {
+  try {
+    const out = execSync(`systemctl --user is-active ${SERVICE_NAME} 2>/dev/null`, { encoding: 'utf8' }).trim();
+    return out === 'active' ? 'running' : out;
+  } catch { return 'stopped'; }
+}
+
+async function installWatcherService() {
+  const nodeBin = process.execPath;
+  const unit = `[Unit]
+Description=MinaClaw host command watcher
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${nodeBin} ${CLI_PATH} watch
+Restart=always
+RestartSec=5
+WorkingDirectory=${PROJECT_ROOT}
+
+[Install]
+WantedBy=default.target
+`;
+  const dir = path.dirname(SERVICE_PATH);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(SERVICE_PATH, unit);
+
+  try {
+    execSync('systemctl --user daemon-reload', { stdio: 'pipe' });
+    execSync(`systemctl --user enable --now ${SERVICE_NAME}`, { stdio: 'pipe' });
+    return true;
+  } catch (e) {
+    console.log(red('\n  Failed to enable service: ' + e.message));
+    return false;
+  }
+}
+
+async function uninstallWatcherService() {
+  try {
+    execSync(`systemctl --user disable --now ${SERVICE_NAME}`, { stdio: 'pipe' });
+    if (fs.existsSync(SERVICE_PATH)) fs.unlinkSync(SERVICE_PATH);
+    execSync('systemctl --user daemon-reload', { stdio: 'pipe' });
+    return true;
+  } catch (e) {
+    console.log(red('\n  Failed to remove service: ' + e.message));
+    return false;
+  }
+}
+
 // ─── Daemon Management ───────────────────────────────────────────────────────
 
 function runDockerCommand(description, command) {
@@ -976,20 +1031,25 @@ async function getDaemonStatus() {
 async function daemonMenu() {
   while (true) {
     const { running, status } = await getDaemonStatus();
-    const badge = running
-      ? green(`● Running (${status})`)
-      : yellow('○ Stopped');
+    const watcherStatus = getWatcherStatus();
+    const daemonBadge  = running ? green(`● Running (${status})`) : yellow('○ Stopped');
+    const watcherBadge = watcherStatus === 'running' ? green('● running') : yellow('○ ' + watcherStatus);
 
     const { choice } = await inquirer.prompt([{
       type: 'list',
       name: 'choice',
-      message: `Daemon Management  ${badge}`,
+      message: `Daemon Management  ${daemonBadge}`,
       choices: [
         { name: 'Start Daemon',   value: 'start' },
         { name: 'Stop Daemon',    value: 'stop' },
         { name: 'Restart Daemon', value: 'restart' },
         { name: 'Daemon Status',  value: 'status' },
         { name: 'View Logs',      value: 'logs' },
+        new inquirer.Separator(),
+        {
+          name: `Host Watcher Service  ${watcherBadge}`,
+          value: 'watcher',
+        },
         new inquirer.Separator(),
         { name: '← Back',         value: 'back' },
       ],
@@ -1053,6 +1113,60 @@ async function daemonMenu() {
           });
         } catch { /* user exited */ }
         console.log('');
+        break;
+      }
+      case 'watcher': {
+        const ws = getWatcherStatus();
+        const installed = fs.existsSync(SERVICE_PATH);
+        console.log('');
+        console.log(`  Host Watcher Service — ${ws === 'running' ? green('● running') : yellow('○ ' + ws)}`);
+        console.log(dim('  Executes Telegram-approved commands on your machine automatically.\n'));
+
+        const watcherChoices = installed
+          ? [
+              { name: ws === 'running' ? 'Stop service'    : 'Start service',  value: 'toggle' },
+              { name: 'Restart service',                                         value: 'restart' },
+              { name: red('Uninstall service'),                                  value: 'uninstall' },
+              new inquirer.Separator(),
+              { name: '← Back',                                                  value: 'back' },
+            ]
+          : [
+              { name: green('Install & start automatically on boot'),            value: 'install' },
+              new inquirer.Separator(),
+              { name: '← Back',                                                  value: 'back' },
+            ];
+
+        const { watcherAction } = await inquirer.prompt([{
+          type: 'list',
+          name: 'watcherAction',
+          message: 'Host Watcher Service:',
+          choices: watcherChoices,
+        }]);
+
+        if (watcherAction === 'install') {
+          process.stdout.write('  Installing service...');
+          const ok = await installWatcherService();
+          console.log(ok ? ` ${green('done')}` : '');
+          if (ok) console.log(green('  ✓ Watcher is now running and will start automatically on boot.\n'));
+        } else if (watcherAction === 'toggle') {
+          const cmd = ws === 'running' ? 'stop' : 'start';
+          execSync(`systemctl --user ${cmd} ${SERVICE_NAME}`, { stdio: 'pipe' });
+          console.log(green(`  ✓ Service ${cmd}ped.\n`));
+        } else if (watcherAction === 'restart') {
+          execSync(`systemctl --user restart ${SERVICE_NAME}`, { stdio: 'pipe' });
+          console.log(green('  ✓ Service restarted.\n'));
+        } else if (watcherAction === 'uninstall') {
+          const { confirm } = await inquirer.prompt([{
+            type: 'confirm',
+            name: 'confirm',
+            message: 'Uninstall the watcher service?',
+            default: false,
+          }]);
+          if (confirm) {
+            await uninstallWatcherService();
+            console.log(green('  ✓ Service removed.\n'));
+          }
+        }
         break;
       }
     }

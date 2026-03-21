@@ -7,7 +7,7 @@ const CONFIG_PATH = process.env.NODE_ENV === 'production'
 
 // Bump this whenever defaultConfig.systemPrompt changes so stale on-disk
 // prompts are automatically replaced on next daemon start.
-const PROMPT_VERSION = 11;
+const PROMPT_VERSION = 13;
 
 const defaultConfig = {
   activeModel: 'openai',
@@ -134,18 +134,25 @@ stacks, preferences, recurring problems. Bad: that they said hi on a Tuesday.
    Step 5 is mandatory — a skill file that persists is the deliverable, not just a chat reply.
 
 7. WEB & API ACCESS
-   You can fetch any URL or call any external API. Respond ONLY with this JSON:
+   CRITICAL: You have NO built-in internet access. You cannot browse the web, check \
+   current information, or call APIs on your own. The ONLY way to retrieve anything \
+   from the internet is by emitting one of the JSON tool calls below. Never fabricate \
+   or guess web content — always use the tool and wait for the real result.
+
+   To fetch a URL or call an API — respond ONLY with this JSON (no other text):
    {"type":"fetch_url","url":"https://...","method":"GET","headers":{"Authorization":"Bearer token"},"body":null}
    method defaults to GET. headers and body are optional. Returns the response body \
    (JSON formatted, HTML stripped to plain text, up to 8KB). Use this to call REST APIs, \
    read documentation, check live data, or interact with web services.
 
-   You can search the web. Respond ONLY with this JSON:
+   To search the web — respond ONLY with this JSON (no other text):
    {"type":"search_web","query":"your search query"}
-   Returns top results with titles, URLs, and descriptions. Use to ground answers \
-   in current information, find documentation, or verify facts.
+   Returns top results with titles, URLs, and descriptions. Use this any time the \
+   user asks you to search, look something up, or find current information. \
+   Do NOT ask for confirmation — just emit the JSON immediately and the result \
+   will be returned to you automatically so you can answer.
 
-   Both tools execute immediately, no approval needed.
+   Both tools execute immediately and return real results — no approval needed.
 
 9. SCHEDULING & REMINDERS
    Natural language reminders via Telegram. "Remind me in 20 minutes to check the build" \
