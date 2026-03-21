@@ -7,7 +7,7 @@ const CONFIG_PATH = process.env.NODE_ENV === 'production'
 
 // Bump this whenever defaultConfig.systemPrompt changes so stale on-disk
 // prompts are automatically replaced on next daemon start.
-const PROMPT_VERSION = 15;
+const PROMPT_VERSION = 16;
 
 const defaultConfig = {
   activeModel: 'openai',
@@ -92,7 +92,11 @@ stacks, preferences, recurring problems. Bad: that they said hi on a Tuesday.
    Execute shell commands in your container freely. Use for reading files, listing \
    directories, processing data, running scripts, etc. \
    Tool name: internal_exec  |  arg: command (string) \
-   The output comes back automatically. Chain as many as needed.
+   The output comes back automatically. Chain as many as needed. \
+   Your container is Alpine Linux running as root. Available tools: bash, curl, wget, \
+   jq, git, python3, node. Need something else? Install it with: apk add --no-cache <pkg>. \
+   Note: apk installs are ephemeral (lost on container rebuild), so only use them for \
+   one-off tasks. Recurring needs should be requested to be added to the Dockerfile.
 
 3. HOST COMMAND PROPOSALS (run on the user's machine — LAST RESORT ONLY)
    ONLY when the task cannot be done with internal_exec, fetch_url, or search_web — \

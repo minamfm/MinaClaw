@@ -8,7 +8,12 @@ RUN apk add --no-cache \
     harfbuzz \
     ca-certificates \
     ttf-freefont \
-    bash
+    bash \
+    curl \
+    wget \
+    jq \
+    git \
+    python3
 
 # Tell Playwright where to find the local chromium
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
