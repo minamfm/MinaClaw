@@ -16,6 +16,7 @@ const SKILLS_DIR = path.join(PROJECT_ROOT, 'skills');
 if (process.argv[2] === 'watch') {
   watchMode().catch(console.error);
   // watchMode() never resolves; process stays alive until Ctrl+C
+  process.exitCode = 0; // suppress any exit-code noise
 }
 
 const CONFIG_DIR = path.join(PROJECT_ROOT, 'config');
@@ -1284,4 +1285,6 @@ function showAbout() {
   console.log('');
 }
 
-mainMenu().catch(console.error);
+if (process.argv[2] !== 'watch') {
+  mainMenu().catch(console.error);
+}
