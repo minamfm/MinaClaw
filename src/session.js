@@ -1,26 +1,51 @@
 'use strict';
 
-// In-memory conversation history, keyed by session ID.
-// Telegram uses chatId (string); the host CLI uses 'cli'.
-// Survives as long as the daemon process is alive.
+const fs   = require('fs');
+const path = require('path');
 
-const MAX_MESSAGES = 40; // 20 full back-and-forth exchanges
+// Sessions are persisted to disk so daemon restarts don't wipe conversation history.
+const SESSIONS_DIR = process.env.NODE_ENV === 'production'
+  ? '/app/config/sessions'
+  : path.join(__dirname, '..', 'config', 'sessions');
 
-const store      = new Map();
-const tokenStore = new Map(); // sessionId -> { input: number, output: number }
+if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+
+// Max messages kept per session. Tool calls add 2 messages each (assistant + result),
+// so this is set high enough to survive multi-step agentic conversations.
+const MAX_MESSAGES = 200;
+
+const tokenStore = new Map(); // in-memory only — token counts are ephemeral
+
+function sessionPath(sessionId) {
+  // Sanitise the session ID to make it safe as a filename
+  return path.join(SESSIONS_DIR, sessionId.replace(/[^a-zA-Z0-9_-]/g, '_') + '.json');
+}
 
 function get(sessionId) {
-  if (!store.has(sessionId)) store.set(sessionId, []);
-  return store.get(sessionId);
+  const p = sessionPath(sessionId);
+  if (!fs.existsSync(p)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
+function save(sessionId, history) {
+  try {
+    fs.writeFileSync(sessionPath(sessionId), JSON.stringify(history));
+  } catch (e) {
+    console.error('Session save failed:', e.message);
+  }
 }
 
 function append(sessionId, role, content) {
   const history = get(sessionId);
   history.push({ role, content });
-  // Trim oldest messages when the cap is exceeded
-  if (history.length > MAX_MESSAGES) {
-    store.set(sessionId, history.slice(history.length - MAX_MESSAGES));
-  }
+  const trimmed = history.length > MAX_MESSAGES
+    ? history.slice(history.length - MAX_MESSAGES)
+    : history;
+  save(sessionId, trimmed);
 }
 
 function addUsage(sessionId, input = 0, output = 0) {
@@ -33,7 +58,8 @@ function getUsage(sessionId) {
 }
 
 function clear(sessionId) {
-  store.delete(sessionId);
+  const p = sessionPath(sessionId);
+  if (fs.existsSync(p)) fs.unlinkSync(p);
   tokenStore.delete(sessionId);
 }
 
