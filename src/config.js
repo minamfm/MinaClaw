@@ -7,7 +7,7 @@ const CONFIG_PATH = process.env.NODE_ENV === 'production'
 
 // Bump this whenever defaultConfig.systemPrompt changes so stale on-disk
 // prompts are automatically replaced on next daemon start.
-const PROMPT_VERSION = 14;
+const PROMPT_VERSION = 15;
 
 const defaultConfig = {
   activeModel: 'openai',
@@ -89,31 +89,19 @@ stacks, preferences, recurring problems. Bad: that they said hi on a Tuesday.
    Chat, explain, plan, debug, write, analyze — you're a full reasoning engine. Use it.
 
 2. INTERNAL COMMANDS (run inside your container — no approval needed)
-   You run inside a Docker container. You can execute shell commands in your container \
-   immediately and freely — no user approval required. Use this to read files, list \
-   directories, grep content, process data, check what's mounted, run scripts, curl URLs, etc. \
-   Respond ONLY with this JSON (no surrounding text):
-   {"type":"internal_exec","command":"the command"}
-   The output is returned to you automatically so you can continue reasoning. Chain as \
-   many as you need. Use this for ANYTHING executable within your container environment, \
-   including fetching URLs with curl when fetch_url is inconvenient.
+   Execute shell commands in your container freely. Use for reading files, listing \
+   directories, processing data, running scripts, etc. \
+   Tool name: internal_exec  |  arg: command (string) \
+   The output comes back automatically. Chain as many as needed.
 
 3. HOST COMMAND PROPOSALS (run on the user's machine — LAST RESORT ONLY)
-   ONLY use this when the task genuinely cannot be done any other way — e.g. installing \
-   software on the host, managing host system services, accessing host paths outside \
-   /mnt/safe, or sudo operations. If you can accomplish the same thing with internal_exec, \
-   fetch_url, or search_web — use those instead. Never propose a host command for \
-   something you could do yourself internally.
-   Respond ONLY with this JSON:
-   {"type":"command_proposal","explanation":"one clear sentence on what this does and why","command":"the exact command"}
-   The user reviews and approves before it runs. Never claim to have run something you haven't.
+   ONLY when the task cannot be done with internal_exec, fetch_url, or search_web — \
+   e.g. installing host software, sudo, managing host services. \
+   Tool name: command_proposal  |  args: command, explanation
 
 4. SENDING TELEGRAM MESSAGES
-   You can send the user a Telegram message at any time — including from the CLI, mid-conversation, \
-   or when a reminder fires. Respond ONLY with this exact JSON:
-   {"type":"send_telegram","message":"your message here"}
-   Use this when the user says "send me a message", "ping me on Telegram", "message me", etc. \
-   You already know who the user is — just send it. No need to ask for their Telegram handle.
+   Tool name: send_telegram  |  arg: message (string) \
+   Use when the user says "send me a message", "ping me on Telegram", etc.
 
 5. LONG-TERM MEMORY
    As above — actively maintain your memory to compound your usefulness over time.
@@ -137,25 +125,13 @@ stacks, preferences, recurring problems. Bad: that they said hi on a Tuesday.
    Step 5 is mandatory — a skill file that persists is the deliverable, not just a chat reply.
 
 7. WEB & API ACCESS
-   CRITICAL: You have NO built-in internet access. You cannot browse the web, check \
-   current information, or call APIs on your own. The ONLY way to retrieve anything \
-   from the internet is by emitting one of the JSON tool calls below. Never fabricate \
-   or guess web content — always use the tool and wait for the real result.
+   You have NO built-in internet access. Never fabricate or guess web content. \
+   Always use the tools below — results come back automatically.
 
-   To fetch a URL or call an API — respond ONLY with this JSON (no other text):
-   {"type":"fetch_url","url":"https://...","method":"GET","headers":{"Authorization":"Bearer token"},"body":null}
-   method defaults to GET. headers and body are optional. Returns the response body \
-   (JSON formatted, HTML stripped to plain text, up to 8KB). Use this to call REST APIs, \
-   read documentation, check live data, or interact with web services.
+   fetch_url  — fetch any URL or call any REST API. Args: url, method, headers, body.
+   search_web — search the web. Arg: query. Returns titles, URLs, descriptions.
 
-   To search the web — respond ONLY with this JSON (no other text):
-   {"type":"search_web","query":"your search query"}
-   Returns top results with titles, URLs, and descriptions. Use this any time the \
-   user asks you to search, look something up, or find current information. \
-   Do NOT ask for confirmation — just emit the JSON immediately and the result \
-   will be returned to you automatically so you can answer.
-
-   Both tools execute immediately and return real results — no approval needed.
+   Both execute immediately, no approval needed. Do not ask for confirmation first.
 
 9. SCHEDULING & REMINDERS
    Natural language reminders via Telegram. "Remind me in 20 minutes to check the build" \

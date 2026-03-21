@@ -30,6 +30,72 @@ const grok = new OpenAI({
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const gemini = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
+// ─── Native tool definitions (OpenAI + Anthropic) ────────────────────────────
+
+const TOOL_DEFS = [
+  {
+    name: 'internal_exec',
+    description: 'Execute a shell command inside the agent container immediately — no approval needed. Use for reading files, processing data, any task achievable within the container. Always prefer this over command_proposal.',
+    params: {
+      command: { type: 'string', description: 'Shell command to execute' },
+    },
+    required: ['command'],
+  },
+  {
+    name: 'fetch_url',
+    description: 'Fetch any URL and return its content. Use for REST APIs, web pages, documentation, or any HTTP request.',
+    params: {
+      url:     { type: 'string', description: 'URL to fetch' },
+      method:  { type: 'string', description: 'HTTP method (default: GET)' },
+      headers: { type: 'object', description: 'Optional request headers', additionalProperties: { type: 'string' } },
+      body:    { type: 'string', description: 'Optional request body' },
+    },
+    required: ['url'],
+  },
+  {
+    name: 'search_web',
+    description: 'Search the web and return top results with titles, URLs, and descriptions. Use for current events, news, or any information lookup.',
+    params: {
+      query: { type: 'string', description: 'Search query' },
+    },
+    required: ['query'],
+  },
+  {
+    name: 'command_proposal',
+    description: 'Propose a command to run on the HOST machine — requires user approval. LAST RESORT ONLY: use only when the task cannot be done with internal_exec, fetch_url, or search_web (e.g. installing host software, sudo operations).',
+    params: {
+      command:     { type: 'string', description: 'The exact command to run on the host' },
+      explanation: { type: 'string', description: 'One sentence: what it does and why it needs host access' },
+    },
+    required: ['command', 'explanation'],
+  },
+  {
+    name: 'send_telegram',
+    description: 'Send a Telegram message to the user.',
+    params: {
+      message: { type: 'string', description: 'Message to send' },
+    },
+    required: ['message'],
+  },
+];
+
+const OPENAI_TOOLS = TOOL_DEFS.map(t => ({
+  type: 'function',
+  function: {
+    name: t.name,
+    description: t.description,
+    parameters: { type: 'object', properties: t.params, required: t.required },
+  },
+}));
+
+const ANTHROPIC_TOOLS = TOOL_DEFS.map(t => ({
+  name: t.name,
+  description: t.description,
+  input_schema: { type: 'object', properties: t.params, required: t.required },
+}));
+
+// ─── Response parser (for non-native providers) ───────────────────────────────
+
 function parseResponse(text) {
   // 1. Clean fences and try the whole string (well-behaved models)
   const cleaned = text.trim().replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
@@ -59,54 +125,33 @@ function parseResponse(text) {
   return { type: 'text', response: text };
 }
 
-// Returns { text, usage: { input, output } | null, model }
-async function queryLLM(messages) {
-  const config      = loadConfig();
-  const activeModel = config.activeModel;
-  const modelName   = (config.models && config.models[activeModel]) || activeModel;
+// ─── Provider query functions ─────────────────────────────────────────────────
 
-  // Inject persistent memory into the system prompt on every call
-  const memoryContext = loadMemoryContext();
-  const sysPrompt = memoryContext
-    ? `${config.systemPrompt}\n\n---\n\n${memoryContext}`
-    : config.systemPrompt;
+// Returns { raw, usage, nativeToolCall? }
+// nativeToolCall: { provider, toolCallId, assistantMsg (OpenAI) | assistantContent (Anthropic) }
+async function queryOpenAI(messages, model) {
+  const response = await openai.chat.completions.create({
+    model,
+    messages,
+    tools: OPENAI_TOOLS,
+    tool_choice: 'auto',
+  });
 
-  const fullMessages = [
-    { role: 'system', content: sysPrompt },
-    ...messages,
-  ];
+  const choice = response.choices[0];
+  const usage  = { input: response.usage.prompt_tokens, output: response.usage.completion_tokens };
 
-  let result; // { raw, usage }
-  try {
-    switch (activeModel) {
-      case 'openai':    result = await queryOpenAI(fullMessages, modelName);               break;
-      case 'kimi':      result = await queryKimi(fullMessages, modelName);                 break;
-      case 'gemini':    result = await queryGemini(fullMessages, modelName);               break;
-      case 'ollama':    result = await queryOllama(fullMessages, modelName);               break;
-      case 'anthropic': result = await queryAnthropic(fullMessages, modelName, sysPrompt); break;
-      case 'mistral':   result = await queryMistral(fullMessages, modelName);              break;
-      case 'grok':      result = await queryGrok(fullMessages, modelName);                 break;
-      default:          throw new Error(`Unknown provider: ${activeModel}`);
-    }
-  } catch (err) {
-    console.error(`LLM Error (${activeModel}/${modelName}):`, err);
-    return { text: `Error communicating with ${activeModel}: ${err.message}`, usage: null, model: modelName };
+  if (choice.finish_reason === 'tool_calls' && choice.message.tool_calls?.length) {
+    const tc = choice.message.tool_calls[0];
+    let args = {};
+    try { args = JSON.parse(tc.function.arguments); } catch { /* ignore */ }
+    return {
+      raw: JSON.stringify({ type: tc.function.name, ...args }),
+      usage,
+      nativeToolCall: { provider: 'openai', toolCallId: tc.id, assistantMsg: choice.message },
+    };
   }
 
-  // Strip memory tags before the response reaches any caller; persist them silently
-  const { cleanText, remember, identity } = extractMemoryTags(result.raw);
-  if (remember) appendMemory(remember).catch(e => console.error('Memory write failed:', e));
-  if (identity) replaceIdentity(identity).catch(e => console.error('Identity write failed:', e));
-
-  return { text: cleanText, usage: result.usage, model: modelName };
-}
-
-async function queryOpenAI(messages, model) {
-  const response = await openai.chat.completions.create({ model, messages });
-  return {
-    raw:   response.choices[0].message.content,
-    usage: { input: response.usage.prompt_tokens, output: response.usage.completion_tokens },
-  };
+  return { raw: choice.message.content || '', usage };
 }
 
 async function queryKimi(messages, model) {
@@ -134,18 +179,30 @@ async function queryGrok(messages, model) {
 }
 
 async function queryAnthropic(messages, model, sysPrompt) {
-  // Anthropic separates the system prompt from the message list
   const chatMessages = messages.filter(m => m.role !== 'system');
   const response = await anthropic.messages.create({
     model,
     max_tokens: 8096,
     system: sysPrompt,
+    tools: ANTHROPIC_TOOLS,
     messages: chatMessages,
   });
-  return {
-    raw:   response.content[0].text,
-    usage: { input: response.usage.input_tokens, output: response.usage.output_tokens },
-  };
+
+  const usage = { input: response.usage.input_tokens, output: response.usage.output_tokens };
+
+  if (response.stop_reason === 'tool_use') {
+    const toolUse = response.content.find(b => b.type === 'tool_use');
+    if (toolUse) {
+      return {
+        raw: JSON.stringify({ type: toolUse.name, ...toolUse.input }),
+        usage,
+        nativeToolCall: { provider: 'anthropic', toolCallId: toolUse.id, assistantContent: response.content },
+      };
+    }
+  }
+
+  const textBlock = response.content.find(b => b.type === 'text');
+  return { raw: textBlock?.text || '', usage };
 }
 
 async function queryGemini(messages, model) {
@@ -179,8 +236,6 @@ async function queryOllama(messages, model) {
     };
   } catch (err) {
     if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
-      // Ollama is likely bound to 127.0.0.1 only and can't be reached from Docker.
-      // Return a self-healing command proposal so the user can fix it with one click.
       return {
         raw: JSON.stringify({
           type: 'command_proposal',
@@ -194,15 +249,58 @@ async function queryOllama(messages, model) {
   }
 }
 
+// ─── queryLLM ─────────────────────────────────────────────────────────────────
+
+// Returns { text, usage, model, nativeToolCall? }
+async function queryLLM(messages) {
+  const config      = loadConfig();
+  const activeModel = config.activeModel;
+  const modelName   = (config.models && config.models[activeModel]) || activeModel;
+
+  const memoryContext = loadMemoryContext();
+  const sysPrompt = memoryContext
+    ? `${config.systemPrompt}\n\n---\n\n${memoryContext}`
+    : config.systemPrompt;
+
+  const fullMessages = [
+    { role: 'system', content: sysPrompt },
+    ...messages,
+  ];
+
+  let result;
+  try {
+    switch (activeModel) {
+      case 'openai':    result = await queryOpenAI(fullMessages, modelName);               break;
+      case 'kimi':      result = await queryKimi(fullMessages, modelName);                 break;
+      case 'gemini':    result = await queryGemini(fullMessages, modelName);               break;
+      case 'ollama':    result = await queryOllama(fullMessages, modelName);               break;
+      case 'anthropic': result = await queryAnthropic(fullMessages, modelName, sysPrompt); break;
+      case 'mistral':   result = await queryMistral(fullMessages, modelName);              break;
+      case 'grok':      result = await queryGrok(fullMessages, modelName);                 break;
+      default:          throw new Error(`Unknown provider: ${activeModel}`);
+    }
+  } catch (err) {
+    console.error(`LLM Error (${activeModel}/${modelName}):`, err);
+    return { text: `Error communicating with ${activeModel}: ${err.message}`, usage: null, model: modelName };
+  }
+
+  // Strip memory tags silently
+  const { cleanText, remember, identity } = extractMemoryTags(result.raw);
+  if (remember) appendMemory(remember).catch(e => console.error('Memory write failed:', e));
+  if (identity) replaceIdentity(identity).catch(e => console.error('Identity write failed:', e));
+
+  return { text: cleanText, usage: result.usage, model: modelName, nativeToolCall: result.nativeToolCall || null };
+}
+
+// ─── queryLLMLoop ─────────────────────────────────────────────────────────────
+
 /**
- * Wraps queryLLM with an internal_exec tool loop.
- * When the LLM responds with {"type":"internal_exec","command":"..."}, the command
- * is executed inside the container immediately (no user approval), and its output
- * is fed back to the LLM so it can continue. Loops up to MAX_STEPS times.
+ * Runs the LLM in a tool loop.
+ * - For OpenAI and Anthropic: uses native function calling (reliable).
+ * - For other providers: falls back to JSON-in-text parsing.
  *
- * Returns { text, usage, model, parsed, newMessages } where newMessages contains
- * all intermediate + final assistant messages (and tool output user messages) to
- * be appended to the session by the caller.
+ * msgs:        working message array for LLM calls (may contain native tool formats)
+ * newMessages: simple text format only — safe to persist to session across provider changes
  */
 async function queryLLMLoop(messages) {
   const MAX_STEPS = 8;
@@ -228,7 +326,7 @@ async function queryLLMLoop(messages) {
       return { text: result.text, usage: totalUsage, model: lastModel, parsed, newMessages };
     }
 
-    // Execute tool — no user approval required for any of these
+    // Execute tool
     let output;
     if (parsed.type === 'internal_exec') {
       console.log(`[internal_exec] ${parsed.command}`);
@@ -246,12 +344,28 @@ async function queryLLMLoop(messages) {
                 : `search "${parsed.query}"`;
     const outputMsg = `${label} result:\n\`\`\`\n${output}\n\`\`\``;
 
+    // Session persistence — always simple text
     newMessages.push({ role: 'assistant', content: result.text });
     newMessages.push({ role: 'user',      content: outputMsg });
-    msgs = [...msgs,
-      { role: 'assistant', content: result.text },
-      { role: 'user',      content: outputMsg },
-    ];
+
+    // Working messages — use native format for OpenAI/Anthropic, text for others
+    const ntc = result.nativeToolCall;
+    if (ntc?.provider === 'openai') {
+      msgs = [...msgs,
+        ntc.assistantMsg,
+        { role: 'tool', tool_call_id: ntc.toolCallId, content: output },
+      ];
+    } else if (ntc?.provider === 'anthropic') {
+      msgs = [...msgs,
+        { role: 'assistant', content: ntc.assistantContent },
+        { role: 'user',      content: [{ type: 'tool_result', tool_use_id: ntc.toolCallId, content: output }] },
+      ];
+    } else {
+      msgs = [...msgs,
+        { role: 'assistant', content: result.text },
+        { role: 'user',      content: outputMsg },
+      ];
+    }
   }
 
   const fallback = 'I ran too many internal commands trying to answer that. Please ask me to continue.';
