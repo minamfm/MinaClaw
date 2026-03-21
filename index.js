@@ -54,20 +54,41 @@ app.post('/command-result', async (req, res) => {
   session.append(sessionId, 'user',
     `Command \`${command}\` was executed on my machine. Output:\n\`\`\`\n${output}\n\`\`\``);
 
-  let reply;
   try {
     const { text, usage, parsed, newMessages } = await queryLLMLoop(session.get(sessionId), { sessionId });
     for (const msg of newMessages) session.append(sessionId, msg.role, msg.content);
     if (usage) session.addUsage(sessionId, usage.input, usage.output);
-    reply = (parsed.type === 'text' ? parsed.response : null) || text;
-  } catch {
-    reply = `Command finished.\n\`\`\`\n${output}\n\`\`\``;
-  }
 
-  if (bot) {
-    // Try sending as plain text; guaranteed to succeed regardless of content
-    try { await bot.telegram.sendMessage(chatId, reply); }
-    catch (err) { console.error('Failed to send Telegram message:', err.message); }
+    if (!bot) return res.json({ ok: true });
+
+    if (parsed.type === 'command_proposal') {
+      // Agent needs to run another host command — show the approval buttons
+      const id = queue.enqueue(chatId, parsed.command, parsed.explanation);
+      await bot.telegram.sendMessage(chatId,
+        `📋 *Command proposal*\n\n_Reason:_ ${parsed.explanation}\n\`\`\`\n${parsed.command}\n\`\`\`\n\nThis will run on your host machine via the MinaClaw watcher.`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [[
+              { text: '✅ Run it',              callback_data: `approve:${id}`     },
+              { text: '🔁 Always this session', callback_data: `approve_all:${id}` },
+              { text: '❌ Cancel',              callback_data: `cancel:${id}`      },
+            ]],
+          },
+        }
+      ).catch(err => console.error('Failed to send command proposal:', err.message));
+    } else {
+      const reply = (parsed.type === 'text' ? parsed.response : null) || text;
+      await bot.telegram.sendMessage(chatId, reply)
+        .catch(err => console.error('Failed to send Telegram message:', err.message));
+    }
+  } catch (err) {
+    console.error('command-result handler error:', err.message);
+    if (bot) {
+      await bot.telegram.sendMessage(chatId,
+        `Command finished.\n\`\`\`\n${output}\n\`\`\``
+      ).catch(() => {});
+    }
   }
 
   res.json({ ok: true });

@@ -747,8 +747,11 @@ async function watchMode() {
         });
         console.log(green('✓ Result sent to Telegram.'));
       }
-    } catch {
-      // Daemon not running — will retry silently
+    } catch (err) {
+      if (err.code !== 'ECONNREFUSED' && err.code !== 'ENOTFOUND') {
+        console.error(`[watcher] ${err.message}`);
+      }
+      // Daemon not running or transient error — will retry on next poll
     }
   };
 
