@@ -304,13 +304,19 @@ async function queryLLM(messages) {
  * newMessages: simple text format only — safe to persist to session across provider changes
  */
 async function queryLLMLoop(messages) {
-  const MAX_STEPS = 8;
+  const MAX_STEPS  = 25;
+  const WARN_STEP  = 22; // inject a wrap-up nudge before hard-stopping
   let msgs = [...messages];
   const newMessages = [];
   let totalUsage = null;
   let lastModel  = '';
 
   for (let i = 0; i < MAX_STEPS; i++) {
+    // Nudge the agent to wrap up gracefully before hitting the hard limit
+    if (i === WARN_STEP) {
+      msgs = [...msgs, { role: 'user', content: 'You are close to the tool call limit. Wrap up what you have and give your final answer now — do not call any more tools.' }];
+    }
+
     const result = await queryLLM(msgs);
     lastModel = result.model;
     if (result.usage) {
