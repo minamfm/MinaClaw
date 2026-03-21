@@ -141,9 +141,43 @@ function startTelegramBot() {
       }
     };
 
-    // After 25s with no tool calls, send a generic reassurance
+    // Streaming message — created on first text chunk, edited every 2 sentence endings
+    let streamMsgId   = null;
+    let streamCreating = false;
+    let streamText    = '';
+    let streamPeriods = 0;
+    let streamLastEdit = 0;
+
+    const onChunk = (accumulated) => {
+      // Detect a new LLM step (accumulation reset to short text)
+      if (accumulated.length < streamText.length) { streamText = ''; streamPeriods = 0; }
+
+      const newEndings = Math.max(0,
+        (accumulated.match(/[.!?]/g) || []).length - (streamText.match(/[.!?]/g) || []).length);
+      streamPeriods += newEndings;
+      streamText = accumulated;
+
+      const now = Date.now();
+
+      if (!streamMsgId && !streamCreating && accumulated.length >= 30) {
+        streamCreating = true;
+        ctx.reply(accumulated).then(msg => {
+          if (msg) { streamMsgId = msg.message_id; streamLastEdit = Date.now(); streamPeriods = 0; }
+          streamCreating = false;
+        }).catch(() => { streamCreating = false; });
+        return;
+      }
+
+      if (streamMsgId && streamPeriods >= 2 && (now - streamLastEdit) >= 800) {
+        ctx.telegram.editMessageText(ctx.chat.id, streamMsgId, null, accumulated).catch(() => {});
+        streamLastEdit = now;
+        streamPeriods = 0;
+      }
+    };
+
+    // After 25s with no tool calls and no streaming, send a generic reassurance
     workingTimer = setTimeout(async () => {
-      if (!progressSent) {
+      if (!progressSent && !streamMsgId) {
         await ctx.reply('⏳ Still working on it, this is taking a moment…').catch(() => {});
       }
     }, 25_000);
@@ -166,7 +200,7 @@ function startTelegramBot() {
       if (thinking && !resuming) session.clearThinking(sessionId);
     }
 
-    const { text: llmText, usage, parsed, newMessages, hitLimit } = await queryLLMLoop(messages, { onProgress, sessionId });
+    const { text: llmText, usage, parsed, newMessages, hitLimit } = await queryLLMLoop(messages, { onProgress, onChunk, sessionId });
     clearInterval(typingInterval);
     clearTimeout(workingTimer);
 
@@ -211,7 +245,15 @@ function startTelegramBot() {
       );
     }
 
-    ctx.reply(parsed.response);
+    const finalText = parsed.response || llmText;
+    if (streamMsgId) {
+      // Finalize the streaming message with the complete, clean text
+      ctx.telegram.editMessageText(ctx.chat.id, streamMsgId, null, finalText).catch(() => {
+        ctx.reply(finalText); // fallback if the message is too old to edit
+      });
+    } else {
+      ctx.reply(finalText);
+    }
   });
 
   bot.on('voice', async (ctx) => {

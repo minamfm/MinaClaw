@@ -127,62 +127,91 @@ function parseResponse(text) {
 }
 
 // ─── Provider query functions ─────────────────────────────────────────────────
-
+// All accept an optional onChunk(accumulatedText) callback for streaming.
 // Returns { raw, usage, nativeToolCall? }
-// nativeToolCall: { provider, toolCallId, assistantMsg (OpenAI) | assistantContent (Anthropic) }
-async function queryOpenAI(messages, model) {
-  const response = await openai.chat.completions.create({
+
+async function queryOpenAI(messages, model, onChunk) {
+  const stream = await openai.chat.completions.create({
     model,
     messages,
     tools: OPENAI_TOOLS,
     tool_choice: 'auto',
-    parallel_tool_calls: false, // one at a time — we loop, not batch
+    parallel_tool_calls: false,
+    stream: true,
+    stream_options: { include_usage: true },
   });
 
-  const choice = response.choices[0];
-  const usage  = { input: response.usage.prompt_tokens, output: response.usage.completion_tokens };
+  let text = '', toolCallId = '', toolCallName = '', toolCallArgs = '';
+  let isToolCall = false;
+  let usage = { input: 0, output: 0 };
 
-  if (choice.finish_reason === 'tool_calls' && choice.message.tool_calls?.length) {
-    const tc = choice.message.tool_calls[0];
-    let args = {};
-    try { args = JSON.parse(tc.function.arguments); } catch { /* ignore */ }
-    return {
-      raw: JSON.stringify({ type: tc.function.name, ...args }),
-      usage,
-      nativeToolCall: { provider: 'openai', toolCallId: tc.id, assistantMsg: choice.message },
-    };
+  for await (const chunk of stream) {
+    if (chunk.usage) {
+      usage = { input: chunk.usage.prompt_tokens, output: chunk.usage.completion_tokens };
+    }
+    const delta = chunk.choices[0]?.delta;
+    if (!delta) continue;
+    if (delta.tool_calls?.length) {
+      isToolCall = true;
+      const tc = delta.tool_calls[0];
+      if (tc.id)                  toolCallId   += tc.id;
+      if (tc.function?.name)      toolCallName += tc.function.name;
+      if (tc.function?.arguments) toolCallArgs += tc.function.arguments;
+    } else if (delta.content) {
+      text += delta.content;
+      if (onChunk) onChunk(text);
+    }
   }
 
-  return { raw: choice.message.content || '', usage };
+  if (isToolCall) {
+    let args = {};
+    try { args = JSON.parse(toolCallArgs); } catch { /* ignore */ }
+    return {
+      raw: JSON.stringify({ type: toolCallName, ...args }),
+      usage,
+      nativeToolCall: {
+        provider: 'openai',
+        toolCallId,
+        assistantMsg: {
+          role: 'assistant', content: null,
+          tool_calls: [{ id: toolCallId, type: 'function',
+            function: { name: toolCallName, arguments: toolCallArgs } }],
+        },
+      },
+    };
+  }
+  return { raw: text, usage };
 }
 
-async function queryKimi(messages, model) {
-  const response = await kimi.chat.completions.create({ model, messages });
-  return {
-    raw:   response.choices[0].message.content,
-    usage: { input: response.usage.prompt_tokens, output: response.usage.completion_tokens },
-  };
+// Shared streaming helper for OpenAI-compatible providers without native tool calling
+async function queryOpenAICompat(client, messages, model, onChunk) {
+  const stream = await client.chat.completions.create({ model, messages, stream: true });
+  let text = '', usage = { input: 0, output: 0 };
+  for await (const chunk of stream) {
+    if (chunk.usage) usage = { input: chunk.usage.prompt_tokens, output: chunk.usage.completion_tokens };
+    const delta = chunk.choices[0]?.delta?.content;
+    if (delta) {
+      text += delta;
+      // Suppress streaming if the response looks like a JSON tool call
+      if (onChunk && text.length > 40 && !text.trimStart().startsWith('{')) onChunk(text);
+    }
+  }
+  return { raw: text, usage };
 }
 
-async function queryMistral(messages, model) {
-  const response = await mistral.chat.completions.create({ model, messages });
-  return {
-    raw:   response.choices[0].message.content,
-    usage: { input: response.usage.prompt_tokens, output: response.usage.completion_tokens },
-  };
+async function queryKimi(messages, model, onChunk) {
+  return queryOpenAICompat(kimi, messages, model, onChunk);
+}
+async function queryMistral(messages, model, onChunk) {
+  return queryOpenAICompat(mistral, messages, model, onChunk);
+}
+async function queryGrok(messages, model, onChunk) {
+  return queryOpenAICompat(grok, messages, model, onChunk);
 }
 
-async function queryGrok(messages, model) {
-  const response = await grok.chat.completions.create({ model, messages });
-  return {
-    raw:   response.choices[0].message.content,
-    usage: { input: response.usage.prompt_tokens, output: response.usage.completion_tokens },
-  };
-}
-
-async function queryAnthropic(messages, model, sysPrompt) {
+async function queryAnthropic(messages, model, sysPrompt, onChunk) {
   const chatMessages = messages.filter(m => m.role !== 'system');
-  const response = await anthropic.messages.create({
+  const stream = anthropic.messages.stream({
     model,
     max_tokens: 8096,
     system: sysPrompt,
@@ -190,58 +219,95 @@ async function queryAnthropic(messages, model, sysPrompt) {
     messages: chatMessages,
   });
 
-  const usage = { input: response.usage.input_tokens, output: response.usage.output_tokens };
+  let text = '', toolInputJson = '', toolUse = null;
+  const assistantContent = [];
+  let usage = { input: 0, output: 0 };
 
-  if (response.stop_reason === 'tool_use') {
-    const toolUse = response.content.find(b => b.type === 'tool_use');
-    if (toolUse) {
-      return {
-        raw: JSON.stringify({ type: toolUse.name, ...toolUse.input }),
-        usage,
-        nativeToolCall: { provider: 'anthropic', toolCallId: toolUse.id, assistantContent: response.content },
-      };
+  for await (const event of stream) {
+    if (event.type === 'message_start') {
+      usage.input = event.message.usage.input_tokens;
+    } else if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
+      toolUse = { id: event.content_block.id, name: event.content_block.name };
+    } else if (event.type === 'content_block_delta') {
+      if (event.delta.type === 'text_delta') {
+        text += event.delta.text;
+        if (onChunk) onChunk(text);
+      } else if (event.delta.type === 'input_json_delta') {
+        toolInputJson += event.delta.partial_json;
+      }
+    } else if (event.type === 'message_delta') {
+      usage.output = event.usage?.output_tokens || 0;
+      if (event.delta.stop_reason === 'tool_use' && toolUse) {
+        let args = {};
+        try { args = JSON.parse(toolInputJson); } catch { /* ignore */ }
+        if (text) assistantContent.push({ type: 'text', text });
+        assistantContent.push({ type: 'tool_use', id: toolUse.id, name: toolUse.name, input: args });
+        return {
+          raw: JSON.stringify({ type: toolUse.name, ...args }),
+          usage,
+          nativeToolCall: { provider: 'anthropic', toolCallId: toolUse.id, assistantContent },
+        };
+      }
     }
   }
-
-  const textBlock = response.content.find(b => b.type === 'text');
-  return { raw: textBlock?.text || '', usage };
+  return { raw: text, usage };
 }
 
-async function queryGemini(messages, model) {
-  // Gemini maps 'system'/'user' → 'user', 'assistant' → 'model'
+async function queryGemini(messages, model, onChunk) {
   const contents = messages.map(m => ({
     role: m.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: m.content }],
   }));
-  const response = await gemini.models.generateContent({ model, contents });
-  const meta = response.usageMetadata;
-  return {
-    raw:   response.text,
-    usage: meta ? { input: meta.promptTokenCount, output: meta.candidatesTokenCount } : null,
-  };
+  const stream = await gemini.models.generateContentStream({ model, contents });
+  let text = '', usage = null;
+  for await (const chunk of stream) {
+    const delta = chunk.text || '';
+    if (delta) {
+      text += delta;
+      if (onChunk && text.length > 40 && !text.trimStart().startsWith('{')) onChunk(text);
+    }
+    if (chunk.usageMetadata) {
+      usage = { input: chunk.usageMetadata.promptTokenCount, output: chunk.usageMetadata.candidatesTokenCount };
+    }
+  }
+  return { raw: text, usage };
 }
 
-async function queryOllama(messages, model) {
+async function queryOllama(messages, model, onChunk) {
   const url = process.env.OLLAMA_URL || 'http://host.docker.internal:11434';
   try {
     const response = await axios.post(
       `${url}/api/chat`,
-      { model, messages, stream: false, think: true, keep_alive: '2h' },
-      { timeout: 600_000 },
+      { model, messages, stream: true, think: true, keep_alive: '2h' },
+      { timeout: 600_000, responseType: 'stream' },
     );
 
-    const thinking = response.data.message.thinking;
-    if (thinking) {
-      console.log(`\n[ollama:think]\n${thinking}\n[/ollama:think]\n`);
-    }
+    return await new Promise((resolve, reject) => {
+      let buf = '', text = '', thinking = '';
 
-    return {
-      raw:   response.data.message.content,
-      usage: {
-        input:  response.data.prompt_eval_count || 0,
-        output: response.data.eval_count        || 0,
-      },
-    };
+      response.data.on('data', raw => {
+        buf += raw.toString();
+        const lines = buf.split('\n');
+        buf = lines.pop(); // keep incomplete line
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let data; try { data = JSON.parse(line); } catch { continue; }
+          if (data.message?.thinking) thinking += data.message.thinking;
+          if (data.message?.content) {
+            text += data.message.content;
+            if (onChunk && text.length > 40 && !text.trimStart().startsWith('{')) onChunk(text);
+          }
+          if (data.done) {
+            if (thinking) console.log(`\n[ollama:think]\n${thinking}\n[/ollama:think]\n`);
+            resolve({ raw: text, usage: { input: data.prompt_eval_count || 0, output: data.eval_count || 0 } });
+          }
+        }
+      });
+
+      response.data.on('error', reject);
+      // Fallback if done:true never arrives
+      response.data.on('end', () => resolve({ raw: text, usage: { input: 0, output: 0 } }));
+    });
   } catch (err) {
     if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
       return {
@@ -260,7 +326,7 @@ async function queryOllama(messages, model) {
 // ─── queryLLM ─────────────────────────────────────────────────────────────────
 
 // Returns { text, usage, model, nativeToolCall? }
-async function queryLLM(messages) {
+async function queryLLM(messages, { onChunk } = {}) {
   const config      = loadConfig();
   const activeModel = config.activeModel;
   const modelName   = (config.models && config.models[activeModel]) || activeModel;
@@ -278,13 +344,13 @@ async function queryLLM(messages) {
   let result;
   try {
     switch (activeModel) {
-      case 'openai':    result = await queryOpenAI(fullMessages, modelName);               break;
-      case 'kimi':      result = await queryKimi(fullMessages, modelName);                 break;
-      case 'gemini':    result = await queryGemini(fullMessages, modelName);               break;
-      case 'ollama':    result = await queryOllama(fullMessages, modelName);               break;
-      case 'anthropic': result = await queryAnthropic(fullMessages, modelName, sysPrompt); break;
-      case 'mistral':   result = await queryMistral(fullMessages, modelName);              break;
-      case 'grok':      result = await queryGrok(fullMessages, modelName);                 break;
+      case 'openai':    result = await queryOpenAI(fullMessages, modelName, onChunk);               break;
+      case 'kimi':      result = await queryKimi(fullMessages, modelName, onChunk);                 break;
+      case 'gemini':    result = await queryGemini(fullMessages, modelName, onChunk);               break;
+      case 'ollama':    result = await queryOllama(fullMessages, modelName, onChunk);               break;
+      case 'anthropic': result = await queryAnthropic(fullMessages, modelName, sysPrompt, onChunk); break;
+      case 'mistral':   result = await queryMistral(fullMessages, modelName, onChunk);              break;
+      case 'grok':      result = await queryGrok(fullMessages, modelName, onChunk);                 break;
       default:          throw new Error(`Unknown provider: ${activeModel}`);
     }
   } catch (err) {
@@ -310,7 +376,7 @@ async function queryLLM(messages) {
  * msgs:        working message array for LLM calls (may contain native tool formats)
  * newMessages: simple text format only — safe to persist to session across provider changes
  */
-async function queryLLMLoop(messages, { onProgress, sessionId } = {}) {
+async function queryLLMLoop(messages, { onProgress, onChunk, sessionId } = {}) {
   const MAX_STEPS  = 25;
   const WARN_STEP  = 22; // inject a wrap-up nudge before hard-stopping
   let msgs = [...messages];
@@ -325,7 +391,7 @@ async function queryLLMLoop(messages, { onProgress, sessionId } = {}) {
       msgs = [...msgs, { role: 'user', content: 'You are close to the tool call limit. Wrap up what you have and give your final answer now — do not call any more tools.' }];
     }
 
-    const result = await queryLLM(msgs);
+    const result = await queryLLM(msgs, { onChunk });
     lastModel = result.model;
     if (result.usage) {
       if (!totalUsage) totalUsage = { input: 0, output: 0 };
