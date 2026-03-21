@@ -226,9 +226,15 @@ async function queryOllama(messages, model) {
   try {
     const response = await axios.post(
       `${url}/api/chat`,
-      { model, messages, stream: false, think: false, keep_alive: '2h' },
+      { model, messages, stream: false, think: true, keep_alive: '2h' },
       { timeout: 600_000 },
     );
+
+    const thinking = response.data.message.thinking;
+    if (thinking) {
+      console.log(`\n[ollama:think]\n${thinking}\n[/ollama:think]\n`);
+    }
+
     return {
       raw:   response.data.message.content,
       usage: {
