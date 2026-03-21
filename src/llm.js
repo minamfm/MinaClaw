@@ -6,6 +6,7 @@ const { loadConfig } = require('./config');
 const { loadMemoryContext, extractMemoryTags, appendMemory, replaceIdentity } = require('./memory');
 const { executeShellCommand } = require('./tools');
 const { fetchUrl, searchWeb } = require('./web-tools');
+const session = require('./session');
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -303,13 +304,14 @@ async function queryLLM(messages) {
  * msgs:        working message array for LLM calls (may contain native tool formats)
  * newMessages: simple text format only — safe to persist to session across provider changes
  */
-async function queryLLMLoop(messages) {
+async function queryLLMLoop(messages, { onProgress, sessionId } = {}) {
   const MAX_STEPS  = 25;
   const WARN_STEP  = 22; // inject a wrap-up nudge before hard-stopping
   let msgs = [...messages];
   const newMessages = [];
   let totalUsage = null;
   let lastModel  = '';
+  const steps = []; // for thinking.md
 
   for (let i = 0; i < MAX_STEPS; i++) {
     // Nudge the agent to wrap up gracefully before hitting the hard limit
@@ -330,6 +332,7 @@ async function queryLLMLoop(messages) {
     const TOOL_TYPES = ['internal_exec', 'fetch_url', 'search_web'];
     if (!TOOL_TYPES.includes(parsed.type)) {
       newMessages.push({ role: 'assistant', content: result.text });
+      if (sessionId) session.clearThinking(sessionId);
       return { text: result.text, usage: totalUsage, model: lastModel, parsed, newMessages };
     }
 
@@ -349,6 +352,26 @@ async function queryLLMLoop(messages) {
     const label = parsed.type === 'internal_exec' ? `\`${parsed.command}\``
                 : parsed.type === 'fetch_url'     ? `fetch ${parsed.url}`
                 : `search "${parsed.query}"`;
+
+    // Progress notification (Telegram live update)
+    if (onProgress) await Promise.resolve(onProgress(label)).catch(() => {});
+
+    // Save task state to disk so it survives daemon crashes or tool call limit hits
+    if (sessionId) {
+      steps.push({ label, snippet: output.slice(0, 150).replace(/\n/g, ' ') });
+      const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+      session.updateThinking(sessionId, [
+        '## Task In Progress',
+        '',
+        `**Prompt**: ${lastUserMsg.slice(0, 300)}`,
+        '',
+        `**Steps completed (${steps.length})**:`,
+        ...steps.map((s, j) => `${j + 1}. ${s.label}  → ${s.snippet}`),
+        '',
+        '**Status**: IN PROGRESS — say "continue" to resume',
+      ].join('\n'));
+    }
+
     const outputMsg = `${label} result:\n\`\`\`\n${output}\n\`\`\``;
 
     // Session persistence — always simple text
@@ -375,9 +398,10 @@ async function queryLLMLoop(messages) {
     }
   }
 
+  // Hit the hard limit — preserve thinking.md so the user can resume
   const fallback = 'I ran too many internal commands trying to answer that. Please ask me to continue.';
   newMessages.push({ role: 'assistant', content: fallback });
-  return { text: fallback, usage: totalUsage, model: lastModel, parsed: { type: 'text', response: fallback }, newMessages };
+  return { text: fallback, usage: totalUsage, model: lastModel, parsed: { type: 'text', response: fallback }, newMessages, hitLimit: true };
 }
 
 module.exports = { queryLLM, queryLLMLoop, parseResponse };

@@ -20,7 +20,7 @@ app.post('/chat', async (req, res) => {
 
   try {
     session.append(sessionId, 'user', message);
-    const { text, usage, model, parsed, newMessages } = await queryLLMLoop(session.get(sessionId));
+    const { text, usage, model, parsed, newMessages } = await queryLLMLoop(session.get(sessionId), { sessionId });
     for (const msg of newMessages) session.append(sessionId, msg.role, msg.content);
     if (usage) session.addUsage(sessionId, usage.input, usage.output);
 
@@ -56,7 +56,7 @@ app.post('/command-result', async (req, res) => {
 
   let reply;
   try {
-    const { text, usage, parsed, newMessages } = await queryLLMLoop(session.get(sessionId));
+    const { text, usage, parsed, newMessages } = await queryLLMLoop(session.get(sessionId), { sessionId });
     for (const msg of newMessages) session.append(sessionId, msg.role, msg.content);
     if (usage) session.addUsage(sessionId, usage.input, usage.output);
     reply = (parsed.type === 'text' ? parsed.response : null) || text;

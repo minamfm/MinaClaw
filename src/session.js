@@ -61,6 +61,28 @@ function clear(sessionId) {
   const p = sessionPath(sessionId);
   if (fs.existsSync(p)) fs.unlinkSync(p);
   tokenStore.delete(sessionId);
+  clearThinking(sessionId);
 }
 
-module.exports = { get, append, addUsage, getUsage, clear };
+// ─── Thinking (in-progress task state) ───────────────────────────────────────
+
+function thinkingPath(sessionId) {
+  return path.join(SESSIONS_DIR, sessionId.replace(/[^a-zA-Z0-9_-]/g, '_') + '_thinking.md');
+}
+
+function updateThinking(sessionId, content) {
+  try { fs.writeFileSync(thinkingPath(sessionId), content); } catch (e) { console.error('Thinking write failed:', e.message); }
+}
+
+function getThinking(sessionId) {
+  const p = thinkingPath(sessionId);
+  if (!fs.existsSync(p)) return null;
+  try { return fs.readFileSync(p, 'utf8'); } catch { return null; }
+}
+
+function clearThinking(sessionId) {
+  const p = thinkingPath(sessionId);
+  try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch { /* ignore */ }
+}
+
+module.exports = { get, append, addUsage, getUsage, clear, updateThinking, getThinking, clearThinking };

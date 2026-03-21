@@ -105,6 +105,8 @@ function startTelegramBot() {
     }
   });
 
+  const LIMIT_FALLBACK = 'I ran too many internal commands trying to answer that. Please ask me to continue.';
+
   bot.on('text', async (ctx) => {
     const text      = ctx.message.text;
     const sessionId = ctx.chat.id.toString();
@@ -120,17 +122,61 @@ function startTelegramBot() {
     ctx.sendChatAction('typing');
     const typingInterval = setInterval(() => ctx.sendChatAction('typing'), 4000);
 
-    // After 25s with no response, send a reassurance message so the user knows work is ongoing
-    let workingMsgSent = false;
-    const workingTimer = setTimeout(async () => {
-      workingMsgSent = true;
-      await ctx.reply('⏳ Still working on it, this is taking a moment…').catch(() => {});
+    // Progress message — created on first tool call, edited on each subsequent one
+    let progressMsgId = null;
+    let progressLines = [];
+    let progressSent  = false;
+    let workingTimer;
+
+    const onProgress = async (label) => {
+      progressSent = true;
+      clearTimeout(workingTimer);
+      progressLines.push(`${progressLines.length + 1}. ${label}`);
+      const body = '⚙️ Working...\n\n' + progressLines.join('\n');
+      if (!progressMsgId) {
+        const msg = await ctx.reply(body).catch(() => null);
+        if (msg) progressMsgId = msg.message_id;
+      } else {
+        await ctx.telegram.editMessageText(ctx.chat.id, progressMsgId, null, body).catch(() => {});
+      }
+    };
+
+    // After 25s with no tool calls, send a generic reassurance
+    workingTimer = setTimeout(async () => {
+      if (!progressSent) {
+        await ctx.reply('⏳ Still working on it, this is taking a moment…').catch(() => {});
+      }
     }, 25_000);
 
+    // Check for resumption context: tool call limit hit OR crash mid-task
+    const history   = session.get(sessionId);
+    const lastAsst  = [...history].reverse().find(m => m.role === 'assistant');
+    const resuming  = lastAsst?.content === LIMIT_FALLBACK;
+    const thinking  = session.getThinking(sessionId);
+
     session.append(sessionId, 'user', text);
-    const { text: llmText, usage, parsed, newMessages } = await queryLLMLoop(session.get(sessionId));
+    let messages = session.get(sessionId);
+
+    if (resuming || thinking) {
+      const hint = thinking
+        ? `\n\n[Previous progress:\n${thinking}\n\nResume from where you left off until fully complete.]`
+        : '\n\n[You previously hit the tool call limit. Review the conversation history above and resume until fully complete.]';
+      messages = [...messages.slice(0, -1), { role: 'user', content: `${text}${hint}` }];
+      // Crash recovery: clear thinking now — the loop will re-create it if needed
+      if (thinking && !resuming) session.clearThinking(sessionId);
+    }
+
+    const { text: llmText, usage, parsed, newMessages, hitLimit } = await queryLLMLoop(messages, { onProgress, sessionId });
     clearInterval(typingInterval);
     clearTimeout(workingTimer);
+
+    // Update the progress message to final state
+    if (progressMsgId) {
+      const status   = hitLimit ? '⚠️ Hit tool call limit — say "continue" to resume' : '✅ Done';
+      const finalBody = `${status}\n\n` + progressLines.join('\n');
+      await ctx.telegram.editMessageText(ctx.chat.id, progressMsgId, null, finalBody).catch(() => {});
+    }
+
     for (const msg of newMessages) session.append(sessionId, msg.role, msg.content);
     if (usage) session.addUsage(sessionId, usage.input, usage.output);
 
