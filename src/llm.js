@@ -327,17 +327,42 @@ async function queryOllama(messages, model, onChunk) {
     });
   } catch (err) {
     if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
-      return {
-        raw: JSON.stringify({
-          type: 'command_proposal',
-          explanation: `Ollama isn't reachable at ${url}. It's bound to 127.0.0.1 only and can't be reached from inside the agent container. This command reconfigures Ollama to accept connections from Docker and restarts it.`,
-          command: `sudo mkdir -p /etc/systemd/system/ollama.service.d && printf '[Service]\\nEnvironment="OLLAMA_HOST=0.0.0.0"\\n' | sudo tee /etc/systemd/system/ollama.service.d/override.conf && sudo systemctl daemon-reload && sudo systemctl restart ollama`,
-        }),
-        usage: null,
-      };
+      const isLocal = url.includes('host.docker.internal') || url.includes('localhost') || url.includes('127.0.0.1');
+      const explanation = isLocal
+        ? `Ollama isn't reachable at ${url}. It may be bound to 127.0.0.1 only. This command reconfigures Ollama to accept connections from Docker and restarts it.`
+        : `Ollama isn't reachable at ${url}. Make sure the remote machine is running Ollama with OLLAMA_HOST=0.0.0.0 and that the port is accessible from this host.`;
+      const command = isLocal
+        ? `sudo mkdir -p /etc/systemd/system/ollama.service.d && printf '[Service]\\nEnvironment="OLLAMA_HOST=0.0.0.0"\\n' | sudo tee /etc/systemd/system/ollama.service.d/override.conf && sudo systemctl daemon-reload && sudo systemctl restart ollama`
+        : `curl -s ${url}/api/tags | head -c 200`;
+      return { raw: JSON.stringify({ type: 'command_proposal', explanation, command }), usage: null };
     }
     throw err;
   }
+}
+
+// ─── Compact system prompt for local/Ollama models ───────────────────────────
+// The full system prompt is ~2000 tokens of verbose docs — too large for local
+// models and causes GPU prefill to freeze the display. This version is ~200 tokens.
+
+function buildOllamaSysPrompt(memoryContext) {
+  const core = `\
+You are a personal AI agent running on the user's machine. Be direct, casual, and helpful.
+
+TOOLS — emit JSON to use a tool, plain text to reply:
+{"type":"internal_exec","command":"..."}                                    — shell cmd in your container (no approval needed)
+{"type":"fetch_url","url":"...","method":"GET","headers":{},"body":"..."}   — fetch URL / call API
+{"type":"search_web","query":"..."}                                         — web search
+{"type":"update_config","target":"config|env","key":"...","value":"..."}    — update agent settings
+{"type":"command_proposal","command":"...","explanation":"..."}             — host command (needs user approval)
+{"type":"send_telegram","message":"..."}                                    — send Telegram message
+
+Container: Alpine Linux, running as root. Available: bash, curl, wget, jq, git, python3, node.
+Safe folders mounted at /mnt/safe. Config at /app/config. Skills at /app/skills.
+
+MEMORY: append <remember>note</remember> or replace <identity>full content</identity> at end of reply.
+RULES: Never narrate tool use — just emit the JSON. Chain as many tool calls as needed.`;
+
+  return memoryContext ? `${core}\n\n---\n\n${memoryContext}` : core;
 }
 
 // ─── queryLLM ─────────────────────────────────────────────────────────────────
@@ -349,9 +374,14 @@ async function queryLLM(messages, { onChunk } = {}) {
   const modelName   = (config.models && config.models[activeModel]) || activeModel;
 
   const memoryContext = loadMemoryContext();
-  const sysPrompt = memoryContext
+  const fullSysPrompt = memoryContext
     ? `${config.systemPrompt}\n\n---\n\n${memoryContext}`
     : config.systemPrompt;
+
+  // Use a compact system prompt for Ollama to avoid GPU freeze during prefill
+  const sysPrompt = activeModel === 'ollama'
+    ? buildOllamaSysPrompt(memoryContext)
+    : fullSysPrompt;
 
   const fullMessages = [
     { role: 'system', content: sysPrompt },

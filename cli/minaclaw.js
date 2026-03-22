@@ -234,7 +234,7 @@ async function configureMenu() {
           value: 'kimi',
         },
         {
-          name: `Ollama (Local)   ${green('● ' + config.models.ollama)}  ${dim(env.OLLAMA_URL || 'http://localhost:11434')}`,
+          name: `Ollama            ${green('● ' + config.models.ollama)}  ${dim(env.OLLAMA_URL || 'http://localhost:11434')}`,
           value: 'ollama',
         },
         new inquirer.Separator(),
@@ -526,12 +526,20 @@ async function configureKimi() {
 async function configureOllama() {
   const config = loadConfig();
   const env = loadEnv();
-  console.log('\nOllama (Local) — no API key required');
+  console.log('\nOllama — no API key required');
 
-  // Try to discover models from the local Ollama instance
+  // Ask for the Ollama URL (supports remote machines)
+  const currentUrl = env.OLLAMA_URL_DISPLAY || env.OLLAMA_URL || 'http://localhost:11434';
+  const { ollamaUrl } = await inquirer.prompt([{
+    name: 'ollamaUrl',
+    message: 'Ollama URL (local or remote):',
+    default: currentUrl,
+  }]);
+
+  // Try to discover models from the specified Ollama instance
   let ollamaModels = [];
   try {
-    const res = await axios.get('http://localhost:11434/api/tags', { timeout: 5000 });
+    const res = await axios.get(`${ollamaUrl.replace(/\/$/, '')}/api/tags`, { timeout: 5000 });
     ollamaModels = (res.data.models || []);
   } catch {
     // Ollama not reachable — fall through to manual entry
@@ -565,7 +573,7 @@ async function configureOllama() {
 
   if (!ollamaModels.length || selectedModel === '__manual__') {
     if (!ollamaModels.length) {
-      console.log(dim('  Could not reach Ollama at localhost:11434 — entering model name manually.\n'));
+      console.log(dim(`  Could not reach Ollama at ${ollamaUrl} — entering model name manually.\n`));
     }
     const { modelInput } = await inquirer.prompt([{
       name: 'modelInput',
@@ -578,8 +586,11 @@ async function configureOllama() {
   config.models.ollama = selectedModel;
   saveConfig(config);
 
-  // Auto-save the daemon-reachable URL
-  env.OLLAMA_URL = 'http://host.docker.internal:11434';
+  // Translate localhost/127.0.0.1 → host.docker.internal so the daemon can reach it from inside Docker.
+  // Remote URLs are saved as-is.
+  const daemonUrl = ollamaUrl.replace(/^(https?:\/\/)(localhost|127\.0\.0\.1)/, '$1host.docker.internal');
+  env.OLLAMA_URL_DISPLAY = ollamaUrl; // keep the human-readable URL for the CLI label
+  env.OLLAMA_URL = daemonUrl;
   saveEnv(env);
 
   console.log(`✓ Ollama set to ${selectedModel}.`);
