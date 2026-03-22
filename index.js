@@ -108,4 +108,15 @@ const server = app.listen(6192, '0.0.0.0', () => {
 
 const bot = startTelegramBot();
 
-if (!bot) console.log('Running in headless mode (no Telegram bot).');
+if (!bot) {
+  console.log('Running in headless mode (no Telegram bot).');
+} else {
+  // Notify the user that the daemon is back online after a restart
+  const cfg = loadConfig();
+  if (cfg.telegramChatId) {
+    setTimeout(() => {
+      bot.telegram.sendMessage(cfg.telegramChatId, '🟢 Back online.')
+        .catch(err => console.error('Startup notification failed:', err.message));
+    }, 3000);
+  }
+}

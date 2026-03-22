@@ -1,6 +1,11 @@
 const { exec } = require('child_process');
 const fs   = require('fs');
 const path = require('path');
+const { loadConfig, updateConfig } = require('./config');
+
+const ENV_PATH = process.env.NODE_ENV === 'production'
+  ? '/app/config/.env'
+  : path.join(__dirname, '..', 'config', '.env');
 
 const SAFE_ROOT = process.env.NODE_ENV === 'production' ? '/mnt/safe' : __dirname;
 // Normalised with trailing separator so /mnt/safe_evil cannot pass the prefix check
@@ -86,9 +91,46 @@ function listDirectory(dirPath = '') {
   }
 }
 
+/**
+ * Update agent config.json or .env.
+ * target: "config" | "env"
+ * key: for config — top-level key or "models.providerName"; for env — env var name
+ */
+function updateAgentConfig(target, key, value) {
+  try {
+    if (target === 'config') {
+      const cfg = loadConfig();
+      // Support "models.ollama" style dot-notation for model names
+      if (key.startsWith('models.')) {
+        const provider = key.slice('models.'.length);
+        updateConfig({ models: { ...cfg.models, [provider]: value } });
+      } else {
+        updateConfig({ [key]: value });
+      }
+      return `Config updated: ${key} = ${value}`;
+    }
+
+    if (target === 'env') {
+      let content = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, 'utf8') : '';
+      const regex = new RegExp(`^${key}=.*$`, 'm');
+      const line  = `${key}=${value}`;
+      content = regex.test(content)
+        ? content.replace(regex, line)
+        : content.trimEnd() + '\n' + line + '\n';
+      fs.writeFileSync(ENV_PATH, content);
+      return `Updated ${key} in .env — restart the daemon for it to take effect.`;
+    }
+
+    return `Unknown target "${target}". Use "config" or "env".`;
+  } catch (err) {
+    return `Error updating config: ${err.message}`;
+  }
+}
+
 module.exports = {
   executeShellCommand,
   readFile,
   writeFile,
   listDirectory,
+  updateAgentConfig,
 };

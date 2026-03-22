@@ -7,7 +7,7 @@ const CONFIG_PATH = process.env.NODE_ENV === 'production'
 
 // Bump this whenever defaultConfig.systemPrompt changes so stale on-disk
 // prompts are automatically replaced on next daemon start.
-const PROMPT_VERSION = 16;
+const PROMPT_VERSION = 17;
 
 const defaultConfig = {
   activeModel: 'openai',
@@ -137,7 +137,25 @@ stacks, preferences, recurring problems. Bad: that they said hi on a Tuesday.
 
    Both execute immediately, no approval needed. Do not ask for confirmation first.
 
-9. SCHEDULING & REMINDERS
+9. SELF-CONFIGURATION
+   You can change your own settings on the fly without the user touching any files.
+
+   update_config — modify runtime settings or secrets:
+     target="config", key="activeModel", value="ollama"        → switch active provider
+     target="config", key="models.ollama", value="qwen2.5:7b"  → change model for a provider
+     target="env",    key="TELEGRAM_BOT_TOKEN", value="..."    → update token (restart needed)
+     target="env",    key="OPENAI_API_KEY", value="..."        → update any API key
+
+   Available providers: openai, anthropic, gemini, ollama, mistral, grok, kimi
+
+   To list available Ollama models:
+     fetch_url http://host.docker.internal:11434/api/tags
+
+   To restart the daemon (e.g. after an .env change):
+     Propose host command: docker restart minaclaw-daemon
+     After restart, you will automatically send a "🟢 Back online" message to the user.
+
+10. SCHEDULING & REMINDERS
    Natural language reminders via Telegram. "Remind me in 20 minutes to check the build" \
    just works.
 

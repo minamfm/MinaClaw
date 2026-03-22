@@ -4,7 +4,7 @@ const { GoogleGenAI } = require('@google/genai');
 const axios = require('axios');
 const { loadConfig } = require('./config');
 const { loadMemoryContext, extractMemoryTags, appendMemory, replaceIdentity } = require('./memory');
-const { executeShellCommand } = require('./tools');
+const { executeShellCommand, updateAgentConfig } = require('./tools');
 const { fetchUrl, searchWeb } = require('./web-tools');
 const session = require('./session');
 
@@ -77,6 +77,16 @@ const TOOL_DEFS = [
       message: { type: 'string', description: 'Message to send' },
     },
     required: ['message'],
+  },
+  {
+    name: 'update_config',
+    description: 'Update the agent\'s own configuration. Use target="config" for runtime settings (activeModel, model names), target="env" for secrets that require a daemon restart (TELEGRAM_BOT_TOKEN, API keys).',
+    params: {
+      target: { type: 'string', description: '"config" for config.json settings, "env" for .env secrets' },
+      key:    { type: 'string', description: 'Setting name. Config keys: activeModel, models.ollama, models.openai, etc. Env keys: TELEGRAM_BOT_TOKEN, OPENAI_API_KEY, etc.' },
+      value:  { type: 'string', description: 'New value to set' },
+    },
+    required: ['target', 'key', 'value'],
   },
 ];
 
@@ -303,7 +313,10 @@ async function queryOllama(messages, model, onChunk) {
           }
           if (data.done) {
             if (thinking) console.log(`\n[ollama:think]\n${thinking}\n[/ollama:think]\n`);
-            resolve({ raw: text, usage: { input: data.prompt_eval_count || 0, output: data.eval_count || 0 } });
+            const inputTok = data.prompt_eval_count || 0;
+            const outputTok = data.eval_count || 0;
+            console.log(`[ollama:tokens] prompt=${inputTok} gen=${outputTok} model=${model}`);
+            resolve({ raw: text, usage: { input: inputTok, output: outputTok } });
           }
         }
       });
@@ -439,7 +452,7 @@ async function queryLLMLoop(messages, { onProgress, onChunk, sessionId } = {}) {
 
     const parsed = parseResponse(result.text);
 
-    const TOOL_TYPES = ['internal_exec', 'fetch_url', 'search_web'];
+    const TOOL_TYPES = ['internal_exec', 'fetch_url', 'search_web', 'update_config'];
     if (!TOOL_TYPES.includes(parsed.type)) {
       newMessages.push({ role: 'assistant', content: result.text });
       if (sessionId) session.clearThinking(sessionId);
@@ -457,10 +470,14 @@ async function queryLLMLoop(messages, { onProgress, onChunk, sessionId } = {}) {
     } else if (parsed.type === 'search_web') {
       console.log(`[search_web] ${parsed.query}`);
       output = await searchWeb(parsed.query);
+    } else if (parsed.type === 'update_config') {
+      console.log(`[update_config] target=${parsed.target} key=${parsed.key}`);
+      output = updateAgentConfig(parsed.target, parsed.key, parsed.value);
     }
 
     const label = parsed.type === 'internal_exec' ? `\`${parsed.command}\``
                 : parsed.type === 'fetch_url'     ? `fetch ${parsed.url}`
+                : parsed.type === 'update_config' ? `config: ${parsed.key} = ${parsed.value}`
                 : `search "${parsed.query}"`;
 
     // Progress notification (Telegram live update)
