@@ -538,8 +538,10 @@ async function configureOllama() {
 
   // Try to discover models from the specified Ollama instance
   let ollamaModels = [];
+  let ollamaReachable = false;
   try {
     const res = await axios.get(`${ollamaUrl.replace(/\/$/, '')}/api/tags`, { timeout: 5000 });
+    ollamaReachable = true;
     ollamaModels = (res.data.models || []);
   } catch {
     // Ollama not reachable — fall through to manual entry
@@ -572,8 +574,10 @@ async function configureOllama() {
   }
 
   if (!ollamaModels.length || selectedModel === '__manual__') {
-    if (!ollamaModels.length) {
+    if (!ollamaReachable) {
       console.log(dim(`  Could not reach Ollama at ${ollamaUrl} — entering model name manually.\n`));
+    } else if (!ollamaModels.length) {
+      console.log(dim(`  Ollama is reachable but has no models pulled. Enter a model name to use once pulled (e.g. ollama pull llama3).\n`));
     }
     const { modelInput } = await inquirer.prompt([{
       name: 'modelInput',
