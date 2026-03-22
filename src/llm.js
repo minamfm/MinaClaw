@@ -107,34 +107,64 @@ const ANTHROPIC_TOOLS = TOOL_DEFS.map(t => ({
 
 // ─── Response parser (for non-native providers) ───────────────────────────────
 
+/**
+ * Walks `text` looking for the first well-formed JSON object that contains a
+ * recognised "type" field.  Uses brace-depth + string-escape tracking so it
+ * correctly handles nested objects and JSON-in-strings (e.g. a "body" field
+ * whose value is a serialised JSON string containing its own { } braces).
+ * The old regex approach stopped at the first } it found, which broke any
+ * tool call that included a nested object such as "headers":{…}.
+ */
+function extractToolJson(text) {
+  const VALID = new Set(['command_proposal','internal_exec','send_telegram','fetch_url','search_web','update_config']);
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '{') continue;
+    let depth = 0, inStr = false, esc = false;
+    for (let j = i; j < text.length; j++) {
+      const c = text[j];
+      if (esc)                  { esc = false; continue; }
+      if (c === '\\' && inStr)  { esc = true;  continue; }
+      if (c === '"')            { inStr = !inStr; continue; }
+      if (inStr)                continue;
+      if (c === '{')            depth++;
+      if (c === '}') {
+        depth--;
+        if (depth === 0) {
+          try {
+            const json = JSON.parse(text.slice(i, j + 1));
+            if (VALID.has(json.type)) return json;
+          } catch { /* malformed — try next { */ }
+          break;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function isValidTool(json) {
+  if (!json) return false;
+  if (json.type === 'command_proposal' && json.command)              return true;
+  if (json.type === 'internal_exec'    && json.command)              return true;
+  if (json.type === 'send_telegram'    && json.message)              return true;
+  if (json.type === 'fetch_url'        && json.url)                  return true;
+  if (json.type === 'search_web'       && json.query)                return true;
+  if (json.type === 'update_config'    && json.target && json.key)   return true;
+  return false;
+}
+
 function parseResponse(text) {
   // 1. Clean fences and try the whole string (well-behaved models)
   const cleaned = text.trim().replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
   if (cleaned.startsWith('{')) {
     try {
       const json = JSON.parse(cleaned);
-      if (json.type === 'command_proposal' && json.command) return json;
-      if (json.type === 'internal_exec'    && json.command) return json;
-      if (json.type === 'send_telegram'    && json.message) return json;
-      if (json.type === 'fetch_url'        && json.url)     return json;
-      if (json.type === 'search_web'       && json.query)   return json;
-      if (json.type === 'update_config'    && json.target && json.key) return json;
+      if (isValidTool(json)) return json;
     } catch { /* fall through */ }
   }
-  // 2. Search anywhere in the text — handles preamble/postamble the model added
-  const TYPES = 'command_proposal|internal_exec|send_telegram|fetch_url|search_web|update_config';
-  const match = text.match(new RegExp(`\\{[\\s\\S]*?"type"\\s*:\\s*"(?:${TYPES})"[\\s\\S]*?\\}`));
-  if (match) {
-    try {
-      const json = JSON.parse(match[0]);
-      if (json.type === 'command_proposal' && json.command) return json;
-      if (json.type === 'internal_exec'    && json.command) return json;
-      if (json.type === 'send_telegram'    && json.message) return json;
-      if (json.type === 'fetch_url'        && json.url)     return json;
-      if (json.type === 'search_web'       && json.query)   return json;
-      if (json.type === 'update_config'    && json.target && json.key) return json;
-    } catch { /* fall through */ }
-  }
+  // 2. Depth-aware extraction — handles nested objects and JSON-in-strings
+  const json = extractToolJson(text);
+  if (isValidTool(json)) return json;
   return { type: 'text', response: text };
 }
 
