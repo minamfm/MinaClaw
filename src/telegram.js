@@ -168,7 +168,7 @@ function startTelegramBot() {
         return;
       }
 
-      if (streamMsgId && streamPeriods >= 2 && (now - streamLastEdit) >= 800) {
+      if (streamMsgId && (streamPeriods >= 2 || (now - streamLastEdit) >= 3000) && (now - streamLastEdit) >= 800) {
         ctx.telegram.editMessageText(ctx.chat.id, streamMsgId, null, accumulated).catch(() => {});
         streamLastEdit = now;
         streamPeriods = 0;
@@ -200,59 +200,66 @@ function startTelegramBot() {
       if (thinking && !resuming) session.clearThinking(sessionId);
     }
 
-    const { text: llmText, usage, parsed, newMessages, hitLimit } = await queryLLMLoop(messages, { onProgress, onChunk, sessionId });
-    clearInterval(typingInterval);
-    clearTimeout(workingTimer);
+    try {
+      const { text: llmText, usage, parsed, newMessages, hitLimit } = await queryLLMLoop(messages, { onProgress, onChunk, sessionId });
+      clearInterval(typingInterval);
+      clearTimeout(workingTimer);
 
-    // Update the progress message to final state
-    if (progressMsgId) {
-      const status   = hitLimit ? '⚠️ Hit tool call limit — say "continue" to resume' : '✅ Done';
-      const finalBody = `${status}\n\n` + progressLines.join('\n');
-      await ctx.telegram.editMessageText(ctx.chat.id, progressMsgId, null, finalBody).catch(() => {});
-    }
+      // Update the progress message to final state
+      if (progressMsgId) {
+        const status   = hitLimit ? '⚠️ Hit tool call limit — say "continue" to resume' : '✅ Done';
+        const finalBody = `${status}\n\n` + progressLines.join('\n');
+        await ctx.telegram.editMessageText(ctx.chat.id, progressMsgId, null, finalBody).catch(() => {});
+      }
 
-    for (const msg of newMessages) session.append(sessionId, msg.role, msg.content);
-    if (usage) session.addUsage(sessionId, usage.input, usage.output);
+      for (const msg of newMessages) session.append(sessionId, msg.role, msg.content);
+      if (usage) session.addUsage(sessionId, usage.input, usage.output);
 
-    if (parsed.type === 'send_telegram') {
-      return ctx.reply(parsed.message);
-    }
+      if (parsed.type === 'send_telegram') {
+        return ctx.reply(parsed.message);
+      }
 
-    if (parsed.type === 'command_proposal') {
-      const id = queue.enqueue(ctx.chat.id, parsed.command, parsed.explanation);
+      if (parsed.type === 'command_proposal') {
+        const id = queue.enqueue(ctx.chat.id, parsed.command, parsed.explanation);
 
-      // Auto-approve if user previously said "always allow" for this command
-      if (queue.isAutoApproved(ctx.chat.id, parsed.command)) {
-        queue.approve(id);
+        // Auto-approve if user previously said "always allow" for this command
+        if (queue.isAutoApproved(ctx.chat.id, parsed.command)) {
+          queue.approve(id);
+          return ctx.reply(
+            `⚡ *Auto-executing \\(pre\\-approved this session\\)*\n\`\`\`\n${parsed.command}\n\`\`\``,
+            { parse_mode: 'MarkdownV2' }
+          );
+        }
+
         return ctx.reply(
-          `⚡ *Auto-executing \\(pre\\-approved this session\\)*\n\`\`\`\n${parsed.command}\n\`\`\``,
-          { parse_mode: 'MarkdownV2' }
+          `📋 *Command proposal*\n\n_Reason:_ ${parsed.explanation}\n\`\`\`\n${parsed.command}\n\`\`\`\n\nThis will run on your host machine via the MinaClaw watcher.`,
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [[
+                { text: '✅ Run it',              callback_data: `approve:${id}`     },
+                { text: '🔁 Always this session', callback_data: `approve_all:${id}` },
+                { text: '❌ Cancel',              callback_data: `cancel:${id}`      },
+              ]],
+            },
+          }
         );
       }
 
-      return ctx.reply(
-        `📋 *Command proposal*\n\n_Reason:_ ${parsed.explanation}\n\`\`\`\n${parsed.command}\n\`\`\`\n\nThis will run on your host machine via the MinaClaw watcher.`,
-        {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [[
-              { text: '✅ Run it',              callback_data: `approve:${id}`     },
-              { text: '🔁 Always this session', callback_data: `approve_all:${id}` },
-              { text: '❌ Cancel',              callback_data: `cancel:${id}`      },
-            ]],
-          },
-        }
-      );
-    }
-
-    const finalText = parsed.response || llmText;
-    if (streamMsgId) {
-      // Finalize the streaming message with the complete, clean text
-      ctx.telegram.editMessageText(ctx.chat.id, streamMsgId, null, finalText).catch(() => {
-        ctx.reply(finalText); // fallback if the message is too old to edit
-      });
-    } else {
-      ctx.reply(finalText);
+      const finalText = parsed.response || llmText;
+      if (streamMsgId) {
+        // Finalize the streaming message with the complete, clean text
+        ctx.telegram.editMessageText(ctx.chat.id, streamMsgId, null, finalText).catch(() => {
+          ctx.reply(finalText); // fallback if the message is too old to edit
+        });
+      } else {
+        ctx.reply(finalText);
+      }
+    } catch (err) {
+      clearInterval(typingInterval);
+      clearTimeout(workingTimer);
+      console.error('Bot handler error:', err);
+      ctx.reply('Sorry, something went wrong on my end. Please try again.').catch(() => {});
     }
   });
 

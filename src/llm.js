@@ -278,7 +278,8 @@ async function queryOllama(messages, model, onChunk) {
   try {
     const response = await axios.post(
       `${url}/api/chat`,
-      { model, messages, stream: true, think: true, keep_alive: '2h' },
+      Object.assign({ model, messages, stream: true, keep_alive: '2h' },
+        /qwen3|deepseek-r1|qwq/i.test(model) ? { think: true } : {}),
       { timeout: 600_000, responseType: 'stream' },
     );
 
@@ -292,7 +293,10 @@ async function queryOllama(messages, model, onChunk) {
         for (const line of lines) {
           if (!line.trim()) continue;
           let data; try { data = JSON.parse(line); } catch { continue; }
-          if (data.message?.thinking) thinking += data.message.thinking;
+          if (data.message?.thinking) {
+            thinking += data.message.thinking;
+            if (onChunk) onChunk('💭 ' + thinking);
+          }
           if (data.message?.content) {
             text += data.message.content;
             if (onChunk && text.length > 40 && !text.trimStart().startsWith('{')) onChunk(text);
@@ -366,6 +370,21 @@ async function queryLLM(messages, { onChunk } = {}) {
   return { text: cleanText, usage: result.usage, model: modelName, nativeToolCall: result.nativeToolCall || null };
 }
 
+// ─── Auto-compact ─────────────────────────────────────────────────────────────
+
+const COMPACT_AT = 60; // message count threshold to trigger compaction
+
+async function compactHistory(msgs) {
+  const transcript = msgs
+    .map(m => `${m.role.toUpperCase()}:\n${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`)
+    .join('\n\n---\n\n');
+  const result = await queryLLM([{
+    role: 'user',
+    content: `Summarize this conversation concisely. Cover: decisions made, key facts established, tasks completed, user preferences, and any ongoing context needed to continue helping.\n\n${transcript}`,
+  }]);
+  return result.text;
+}
+
 // ─── queryLLMLoop ─────────────────────────────────────────────────────────────
 
 /**
@@ -380,6 +399,25 @@ async function queryLLMLoop(messages, { onProgress, onChunk, sessionId } = {}) {
   const MAX_STEPS  = 25;
   const WARN_STEP  = 22; // inject a wrap-up nudge before hard-stopping
   let msgs = [...messages];
+
+  // Auto-compact when conversation history grows too long
+  if (msgs.length >= COMPACT_AT) {
+    try {
+      if (onProgress) await Promise.resolve(onProgress('Compacting session history…')).catch(() => {});
+      console.log(`[compact] session=${sessionId} msgs=${msgs.length} — compacting`);
+      const summary = await compactHistory(msgs);
+      const keepLast = msgs.slice(-6); // keep last 3 exchanges verbatim for immediate continuity
+      msgs = [
+        { role: 'user',      content: `[Previous conversation summarized]\n\n${summary}` },
+        { role: 'assistant', content: 'Got it — I have the summary of our previous conversation.' },
+        ...keepLast,
+      ];
+      if (sessionId) session.save(sessionId, msgs);
+      console.log(`[compact] done — reduced to ${msgs.length} messages`);
+    } catch (err) {
+      console.error('[compact] failed, continuing without compaction:', err.message);
+    }
+  }
   const newMessages = [];
   let totalUsage = null;
   let lastModel  = '';

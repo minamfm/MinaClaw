@@ -30,17 +30,28 @@ function writeMemoryFile(filename, content) {
 
 /**
  * Returns a formatted block ready to inject into the system prompt.
- * Returns '' when both files are empty so the prompt stays uncluttered.
+ * Returns '' when everything is empty so the prompt stays uncluttered.
  */
 function loadMemoryContext() {
   const identity = readMemoryFile('identity.md');
   const memory   = readMemoryFile('memory.md');
 
-  if (!identity && !memory) return '';
+  // Load all skill files (anything ending in _skill.md)
+  let skills = [];
+  try {
+    skills = fs.readdirSync(SKILLS_DIR)
+      .filter(f => f.endsWith('_skill.md'))
+      .sort()
+      .map(f => readMemoryFile(f))
+      .filter(Boolean);
+  } catch { /* skills dir missing */ }
+
+  if (!identity && !memory && !skills.length) return '';
 
   const parts = [];
-  if (identity) parts.push(`## Identity & User Context\n${identity}`);
-  if (memory)   parts.push(`## Your Notes\n${memory}`);
+  if (identity)      parts.push(`## Identity & User Context\n${identity}`);
+  if (memory)        parts.push(`## Your Notes\n${memory}`);
+  if (skills.length) parts.push(`## Skills\n\n${skills.join('\n\n---\n\n')}`);
 
   return parts.join('\n\n');
 }

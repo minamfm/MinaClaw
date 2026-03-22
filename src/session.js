@@ -85,4 +85,4 @@ function clearThinking(sessionId) {
   try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch { /* ignore */ }
 }
 
-module.exports = { get, append, addUsage, getUsage, clear, updateThinking, getThinking, clearThinking };
+module.exports = { get, save, append, addUsage, getUsage, clear, updateThinking, getThinking, clearThinking };
