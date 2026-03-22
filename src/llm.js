@@ -118,10 +118,11 @@ function parseResponse(text) {
       if (json.type === 'send_telegram'    && json.message) return json;
       if (json.type === 'fetch_url'        && json.url)     return json;
       if (json.type === 'search_web'       && json.query)   return json;
+      if (json.type === 'update_config'    && json.target && json.key) return json;
     } catch { /* fall through */ }
   }
   // 2. Search anywhere in the text — handles preamble/postamble the model added
-  const TYPES = 'command_proposal|internal_exec|send_telegram|fetch_url|search_web';
+  const TYPES = 'command_proposal|internal_exec|send_telegram|fetch_url|search_web|update_config';
   const match = text.match(new RegExp(`\\{[\\s\\S]*?"type"\\s*:\\s*"(?:${TYPES})"[\\s\\S]*?\\}`));
   if (match) {
     try {
@@ -131,6 +132,7 @@ function parseResponse(text) {
       if (json.type === 'send_telegram'    && json.message) return json;
       if (json.type === 'fetch_url'        && json.url)     return json;
       if (json.type === 'search_web'       && json.query)   return json;
+      if (json.type === 'update_config'    && json.target && json.key) return json;
     } catch { /* fall through */ }
   }
   return { type: 'text', response: text };
@@ -402,7 +404,7 @@ async function queryLLM(messages, { onChunk } = {}) {
     }
   } catch (err) {
     console.error(`LLM Error (${activeModel}/${modelName}):`, err);
-    return { text: `Error communicating with ${activeModel}: ${err.message}`, usage: null, model: modelName };
+    return { text: `Error communicating with ${activeModel}: ${err.message}`, usage: null, model: modelName, error: true };
   }
 
   // Strip memory tags silently
@@ -478,6 +480,15 @@ async function queryLLMLoop(messages, { onProgress, onChunk, sessionId } = {}) {
       if (!totalUsage) totalUsage = { input: 0, output: 0 };
       totalUsage.input  += result.usage.input;
       totalUsage.output += result.usage.output;
+    }
+
+    // If the LLM itself errored mid-loop, surface what was completed so far
+    if (result.error && i > 0) {
+      const done = steps.map((s, j) => `${j + 1}. ${s.label}`).join('\n');
+      const text = `I hit an error after ${i} step${i > 1 ? 's' : ''} and couldn't finish.\n\n${result.text}\n\nCompleted so far:\n${done}`;
+      newMessages.push({ role: 'assistant', content: text });
+      if (sessionId) session.clearThinking(sessionId);
+      return { text, usage: totalUsage, model: lastModel, parsed: { type: 'text', response: text }, newMessages };
     }
 
     const parsed = parseResponse(result.text);

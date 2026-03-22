@@ -258,8 +258,11 @@ function startTelegramBot() {
         );
       }
 
-      const finalText = parsed.response || llmText;
-      if (streamMsgId) {
+      const finalText = (parsed.response || llmText || '').trim();
+      if (!finalText) {
+        // Model returned empty text (e.g. only memory tags) — don't send a blank message
+        console.warn('[bot] empty finalText, skipping reply');
+      } else if (streamMsgId) {
         // Finalize the streaming message with the complete, clean text
         ctx.telegram.editMessageText(ctx.chat.id, streamMsgId, null, finalText).catch(() => {
           ctx.reply(finalText); // fallback if the message is too old to edit
