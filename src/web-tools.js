@@ -47,7 +47,9 @@ async function fetchUrl(url, method = 'GET', headers = {}, body = null) {
       }
     }
 
-    return `${status}\n\n${text.slice(0, 8000)}${text.length > 8000 ? '\n\n[truncated]' : ''}`;
+    // JSON APIs get a larger window; HTML is mostly noise so keep it tight
+    const cap = (contentType.includes('application/json') || typeof response.data === 'object') ? 24000 : 8000;
+    return `${status}\n\n${text.slice(0, cap)}${text.length > cap ? '\n\n[truncated — response was ' + text.length + ' chars. Use internal_exec with curl | python3 or jq to filter the specific data you need.]' : ''}`;
   } catch (err) {
     return `fetch_url error: ${err.message}`;
   }

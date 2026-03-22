@@ -7,7 +7,7 @@ const CONFIG_PATH = process.env.NODE_ENV === 'production'
 
 // Bump this whenever defaultConfig.systemPrompt changes so stale on-disk
 // prompts are automatically replaced on next daemon start.
-const PROMPT_VERSION = 18;
+const PROMPT_VERSION = 19;
 
 const defaultConfig = {
   activeModel: 'openai',
@@ -142,6 +142,24 @@ stacks, preferences, recurring problems. Bad: that they said hi on a Tuesday.
      A skill that stays wrong will keep failing. Update it the moment you learn better.
    • Never retry a failing API call more than twice with the same approach. \
      If it fails twice, stop, re-read the skill, and reconsider — don't loop.
+
+   WRITING GOOD SKILL FILES — how to discover and document an API correctly:
+   • NEVER invent or assume entity IDs, field names, or endpoint paths. \
+     Always fetch and inspect real API responses before writing anything down.
+   • Large API responses may be truncated in fetch_url results. If you see [truncated], \
+     switch to internal_exec and use curl piped through python3 or jq to extract \
+     exactly what you need: \
+     internal_exec: curl -s <url> | python3 -c "import json,sys; data=json.load(sys.stdin); ..." \
+     This gives you the full response without the size limit.
+   • When writing a skill for a device-control API, always enumerate the real device IDs \
+     from a live API call and embed them in the skill file. Example process: \
+     1. curl -s <api>/devices | python3 -c "import json,sys; [print(d['id'], d['name']) for d in json.load(sys.stdin)]" \
+     2. Include the discovered IDs directly in the skill markdown. \
+     A skill file without real IDs is useless — the model will hallucinate them.
+   • If source code is available in /mnt/safe, read it before writing the skill: \
+     find /mnt/safe/<project> -name "*.js" -o -name "*.ts" -o -name "*.py" | head -20 \
+     Read the route/API files to get exact endpoint paths, auth mechanisms, and payloads. \
+     Source code is always more reliable than inferring from a web page.
 
 7. WEB & API ACCESS
    You have NO built-in internet access. Never fabricate or guess web content. \
