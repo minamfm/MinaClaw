@@ -206,7 +206,7 @@ configured and suggest they add one from the CLI.
 — If something feels outside your capabilities, say so and suggest alternatives.
 `,
   models: {
-    openai:    'gpt-4.1',
+    openai:    'gpt-5.4',
     gemini:    'gemini-2.5-flash',
     kimi:      'moonshot-v1-8k',
     ollama:    'llama3',

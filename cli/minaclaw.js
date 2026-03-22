@@ -50,7 +50,7 @@ const DEFAULT_CONFIG = {
   activeModel: 'openai',
   systemPrompt: 'You are MinaClaw, a reliable 24/7 personal AI agent. Your goal is to assist the user efficiently.',
   models: {
-    openai:    'gpt-4.1',
+    openai:    'gpt-5.4',
     gemini:    'gemini-2.5-flash',
     kimi:      'moonshot-v1-8k',
     ollama:    'llama3',
@@ -93,7 +93,12 @@ function apiBadge(env, envKey, model) {
 // ─── Provider model lists ─────────────────────────────────────────────────────
 
 const OPENAI_MODELS = [
-  // GPT-4.1 family (current generation)
+  // GPT-5.4 family (latest generation)
+  { name: 'gpt-5.4          (flagship, latest generation)',          value: 'gpt-5.4' },
+  { name: 'gpt-5.4-mini     (fast & cost-efficient)',                value: 'gpt-5.4-mini' },
+  { name: 'gpt-5.4-nano     (smallest, cheapest)',                   value: 'gpt-5.4-nano' },
+  new inquirer.Separator('── GPT-4.1 ──'),
+  // GPT-4.1 family
   { name: 'gpt-4.1          (flagship, best coding & instruction)',  value: 'gpt-4.1' },
   { name: 'gpt-4.1-mini     (fast & cost-efficient)',                value: 'gpt-4.1-mini' },
   { name: 'gpt-4.1-nano     (smallest, cheapest)',                   value: 'gpt-4.1-nano' },
