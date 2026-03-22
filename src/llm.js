@@ -288,7 +288,7 @@ async function queryOllama(messages, model, onChunk) {
   try {
     const response = await axios.post(
       `${url}/api/chat`,
-      Object.assign({ model, messages, stream: true, keep_alive: '2h' },
+      Object.assign({ model, messages, stream: true, keep_alive: '2h', options: { num_ctx: 16384 } },
         /qwen3|deepseek-r1|qwq/i.test(model) ? { think: true } : {}),
       { timeout: 600_000, responseType: 'stream' },
     );
