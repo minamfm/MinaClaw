@@ -80,9 +80,8 @@ function startTelegramBot() {
       queue.approve(id);
       await ctx.answerCbQuery('Approved — waiting for host watcher.');
       await ctx.editMessageText(
-        ctx.callbackQuery.message.text + '\n\n⏳ _Approved — waiting for host CLI watcher to execute…_',
-        { parse_mode: 'Markdown' }
-      );
+        ctx.callbackQuery.message.text + '\n\n⏳ Approved — waiting for host CLI watcher to execute…'
+      ).catch(() => {});
     } else if (action === 'approve_all') {
       const item = queue.getById(id);
       if (item) {
@@ -92,16 +91,29 @@ function startTelegramBot() {
       }
       await ctx.answerCbQuery('Always allowed this session.');
       await ctx.editMessageText(
-        ctx.callbackQuery.message.text + '\n\n⚡ _Always allowed this session — queued for execution._',
-        { parse_mode: 'Markdown' }
-      );
+        ctx.callbackQuery.message.text + '\n\n⚡ Always allowed this session — queued for execution.'
+      ).catch(() => {});
     } else if (action === 'cancel') {
+      const item = queue.getById(id);
       queue.cancel(id);
       await ctx.answerCbQuery('Cancelled.');
       await ctx.editMessageText(
-        ctx.callbackQuery.message.text + '\n\n❌ _Cancelled._',
-        { parse_mode: 'Markdown' }
-      );
+        ctx.callbackQuery.message.text + '\n\n❌ Cancelled.'
+      ).catch(() => {});
+
+      // Resume the agent so it can acknowledge the cancellation and continue
+      if (item) {
+        const sessionId = String(item.chatId);
+        session.append(sessionId, 'user', `I cancelled the command proposal. Command: \`${item.command}\``);
+        try {
+          const { text, parsed, newMessages } = await queryLLMLoop(session.get(sessionId), { sessionId });
+          for (const msg of newMessages) session.append(sessionId, msg.role, msg.content);
+          const reply = (parsed?.type === 'text' ? parsed.response : null) || text;
+          await bot.telegram.sendMessage(item.chatId, reply).catch(() => {});
+        } catch (err) {
+          console.error('[cancel-resume] LLM error:', err.message);
+        }
+      }
     }
   });
 
