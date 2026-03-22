@@ -175,12 +175,12 @@ function startTelegramBot() {
       }
     };
 
-    // After 25s with no tool calls and no streaming, send a generic reassurance
+    // After 5s with no tool calls and no streaming, send a generic reassurance
     workingTimer = setTimeout(async () => {
       if (!progressSent && !streamMsgId) {
-        await ctx.reply('⏳ Still working on it, this is taking a moment…').catch(() => {});
+        await ctx.reply('⏳ Working on it…').catch(() => {});
       }
-    }, 25_000);
+    }, 5_000);
 
     // Check for resumption context: tool call limit hit OR crash mid-task
     const history   = session.get(sessionId);
