@@ -279,14 +279,18 @@ function startTelegramBot() {
     ctx.reply('Voice notes received. Transcription module pending implementation.');
   });
 
+  let launchDelay = 5000;
   const launchBot = () => {
     bot.launch().catch(err => {
-      if (err.message && err.message.includes('409')) {
+      const msg = err.message || '';
+      if (msg.includes('409')) {
         console.warn('Telegram 409 conflict — another instance is still shutting down. Retrying in 5s…');
-        setTimeout(launchBot, 5000);
+        launchDelay = 5000;
       } else {
-        console.error('Telegram bot error:', err.message);
+        console.error(`Telegram bot error: ${msg} — retrying in ${launchDelay / 1000}s…`);
+        launchDelay = Math.min(launchDelay * 2, 60000); // exponential backoff, cap at 60s
       }
+      setTimeout(launchBot, launchDelay);
     });
   };
   launchBot();
