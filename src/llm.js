@@ -602,7 +602,7 @@ async function queryLLM(messages, { onChunk, onThinking, signal, sessionId } = {
   const activeModel = config.activeModel;
   const modelName   = (config.models && config.models[activeModel]) || activeModel;
 
-  const memoryContext = loadMemoryContext();
+  const memoryContext = loadMemoryContext(sessionId);
   const fullSysPrompt = memoryContext
     ? `${config.systemPrompt}\n\n---\n\n${memoryContext}`
     : config.systemPrompt;
@@ -654,8 +654,8 @@ async function queryLLM(messages, { onChunk, onThinking, signal, sessionId } = {
 
   // Strip memory tags silently
   const { cleanText, remember, identity } = extractMemoryTags(result.raw);
-  if (remember) appendMemory(remember).catch(e => console.error('Memory write failed:', e));
-  if (identity) replaceIdentity(identity).catch(e => console.error('Identity write failed:', e));
+  if (remember) appendMemory(remember, sessionId).catch(e => console.error('Memory write failed:', e));
+  if (identity) replaceIdentity(identity, sessionId).catch(e => console.error('Identity write failed:', e));
 
   return { text: cleanText, usage: result.usage, model: modelName, nativeToolCall: result.nativeToolCall || null };
 }

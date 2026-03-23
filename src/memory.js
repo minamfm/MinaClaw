@@ -3,46 +3,55 @@
 const fs   = require('fs');
 const path = require('path');
 
-const SKILLS_DIR = process.env.NODE_ENV === 'production'
+const SKILLS_DIR   = process.env.NODE_ENV === 'production'
   ? '/app/skills'
   : path.join(__dirname, '..', 'skills');
 
-const IDENTITY_PATH = path.join(SKILLS_DIR, 'identity.md');
 const MEMORY_PATH   = path.join(SKILLS_DIR, 'memory.md');
+const CONTACTS_DIR  = path.join(SKILLS_DIR, 'contacts');
 
-function ensureDir() {
-  if (!fs.existsSync(SKILLS_DIR)) fs.mkdirSync(SKILLS_DIR, { recursive: true });
+function ensureDir(dir) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-function readMemoryFile(filename) {
-  const p = path.join(SKILLS_DIR, filename);
+// Returns the per-contact directory for a WA session, or null for Telegram/global.
+function contactDir(sessionId) {
+  if (!sessionId || !sessionId.startsWith('wa:')) return null;
+  const jid = sessionId.slice(3).replace(/[^\w@._-]/g, '_');
+  return path.join(CONTACTS_DIR, jid);
+}
+
+function readFile(filePath) {
   try {
-    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim() : '';
+    return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8').trim() : '';
   } catch {
     return '';
   }
 }
 
-function writeMemoryFile(filename, content) {
-  ensureDir();
-  fs.writeFileSync(path.join(SKILLS_DIR, filename), content.trim());
-}
-
 /**
  * Returns a formatted block ready to inject into the system prompt.
- * Returns '' when everything is empty so the prompt stays uncluttered.
+ * identity.md and memory.md are scoped per-contact for WA sessions.
+ * Skills are always loaded from the shared skills/ root.
  */
-function loadMemoryContext() {
-  const identity = readMemoryFile('identity.md');
-  const memory   = readMemoryFile('memory.md');
+function loadMemoryContext(sessionId) {
+  const dir = contactDir(sessionId);
 
-  // Load all skill files (anything ending in _skill.md)
+  const identity = dir
+    ? readFile(path.join(dir, 'identity.md'))
+    : readFile(path.join(SKILLS_DIR, 'identity.md'));
+
+  const memory = dir
+    ? readFile(path.join(dir, 'memory.md'))
+    : readFile(MEMORY_PATH);
+
+  // Skills are always global/shared
   let skills = [];
   try {
     skills = fs.readdirSync(SKILLS_DIR)
       .filter(f => f.endsWith('_skill.md'))
       .sort()
-      .map(f => readMemoryFile(f))
+      .map(f => readFile(path.join(SKILLS_DIR, f)))
       .filter(Boolean);
   } catch { /* skills dir missing */ }
 
@@ -58,8 +67,6 @@ function loadMemoryContext() {
 
 /**
  * Scans the raw LLM response for XML-style memory tags and strips them.
- * Using XML tags avoids the bracket-format bug where a ']' inside the content
- * would prematurely close a [REMEMBER: ...] or [IDENTITY: ...] block.
  *
  *   <remember>note to append to memory.md</remember>
  *   <identity>full replacement content for identity.md</identity>
@@ -86,15 +93,28 @@ function extractMemoryTags(raw) {
   return { cleanText, remember, identity };
 }
 
-async function appendMemory(note) {
-  ensureDir();
+async function appendMemory(note, sessionId) {
   const date  = new Date().toISOString().slice(0, 10);
   const entry = `\n- [${date}] ${note}`;
-  fs.appendFileSync(MEMORY_PATH, entry);
+  const dir   = contactDir(sessionId);
+  if (dir) {
+    ensureDir(dir);
+    fs.appendFileSync(path.join(dir, 'memory.md'), entry);
+  } else {
+    ensureDir(SKILLS_DIR);
+    fs.appendFileSync(MEMORY_PATH, entry);
+  }
 }
 
-async function replaceIdentity(content) {
-  writeMemoryFile('identity.md', content);
+async function replaceIdentity(content, sessionId) {
+  const dir = contactDir(sessionId);
+  if (dir) {
+    ensureDir(dir);
+    fs.writeFileSync(path.join(dir, 'identity.md'), content.trim());
+  } else {
+    ensureDir(SKILLS_DIR);
+    fs.writeFileSync(path.join(SKILLS_DIR, 'identity.md'), content.trim());
+  }
 }
 
 module.exports = {
