@@ -32,7 +32,12 @@ async function executeShellCommand(command) {
       let output = '';
       if (stdout) output += `STDOUT:\n${stdout}\n`;
       if (stderr) output += `STDERR:\n${stderr}\n`;
-      if (error)  output += `ERROR:\n${error.message}\n`;
+      if (error) {
+        const msg = (error.killed || error.signal)
+          ? `TIMEOUT: command exceeded 10s and was killed — likely a hung network connection or blocked I/O, not a script bug`
+          : `ERROR:\n${error.message}`;
+        output += msg + '\n';
+      }
       resolve(output.trim() || 'Command executed silently (no output).');
     });
   });

@@ -688,12 +688,30 @@ async function queryLLMLoop(messages, { onProgress, onChunk, onThinking, signal,
       return { text: result.text, usage: totalUsage, model: lastModel, parsed, newMessages };
     }
 
-    // Loop detection — fingerprint this tool call and break immediately on repeat
-    const toolKey = parsed.type + ':' + (parsed.url || parsed.command || parsed.query || parsed.key || '');
-    recentToolKeys.push(toolKey);
-    if (recentToolKeys.length > 6) recentToolKeys.shift();
-    const repeatCount = recentToolKeys.filter(k => k === toolKey).length;
-    if (repeatCount >= 2) {
+    // Loop detection — two signals:
+    // 1. Exact-same tool call repeated (original check)
+    // 2. Many different tool calls all targeting the same script/URL (semantic loop)
+    const rawTarget = parsed.url || parsed.command || parsed.query || parsed.key || '';
+    const toolKey = parsed.type + ':' + rawTarget;
+    // Semantic key: extract the core target (script path, hostname, etc.) to detect
+    // "debugging spiral" where the model tries the same failing resource many ways.
+    const semanticKey = parsed.type + ':' + (
+      parsed.command ? (parsed.command.match(/\/app\/skills\/\S+\.py/) || parsed.command.match(/https?:\/\/[^/\s]+/))?.[0] || rawTarget.slice(0, 60)
+                     : rawTarget.slice(0, 60)
+    );
+    recentToolKeys.push(semanticKey);
+    if (recentToolKeys.length > 8) recentToolKeys.shift();
+    const repeatCount = recentToolKeys.filter(k => k === semanticKey).length;
+    if (repeatCount >= 4) {
+      const loopText = `I kept hitting the same failure (${semanticKey}) across ${repeatCount} different attempts and stopped myself. This is likely a network, permissions, or environment issue rather than a script bug. Please check connectivity or provide more context.`;
+      console.warn(`[loop-detect] semantic loop exit: ${semanticKey} (${repeatCount}x)`);
+      newMessages.push({ role: 'assistant', content: loopText });
+      if (sessionId) session.clearThinking(sessionId);
+      return { text: loopText, usage: totalUsage, model: lastModel, parsed: { type: 'text', response: loopText }, newMessages };
+    }
+    // Exact repeat check (stricter — fires on 2nd repeat)
+    const exactCount = recentToolKeys.filter(k => k === toolKey).length;
+    if (exactCount >= 2) {
       const loopText = `I got stuck repeating the same tool call (\`${toolKey}\`) and stopped myself. I may not have enough information to complete this task — could you provide more context or clarify what you need?`;
       console.warn(`[loop-detect] forced exit on repeat: ${toolKey}`);
       newMessages.push({ role: 'assistant', content: loopText });
