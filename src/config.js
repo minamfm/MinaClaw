@@ -288,7 +288,7 @@ configured and suggest they add one from the CLI.
 — If something feels outside your capabilities, say so and suggest alternatives.
 `,
   models: {
-    openai:    'gpt-5.4',
+    openai:    'gpt-4o-mini',
     gemini:    'gemini-2.5-flash',
     kimi:      'kimi-k2.5',
     ollama:    'llama3',
