@@ -5,10 +5,11 @@ const { queryLLM } = require('./llm');
 // For MVP, we'll use an in-memory map or simple dynamic cron parsing via the LLM.
 const scheduledTasks = [];
 
-async function handleScheduling(text, ctx) {
-  // We can ask the LLM to parse the reminder into a structured JSON
+// send: function(text) — called both to confirm scheduling and to fire the reminder.
+// Caller passes ctx.reply.bind(ctx) for Telegram or (msg => sendToJid(jid, msg)) for WhatsApp.
+async function handleScheduling(text, send) {
   const extractionPrompt = `
-Extract the scheduling intent from the following text. 
+Extract the scheduling intent from the following text.
 Respond ONLY with a JSON object in this exact format:
 {
   "is_reminder": true/false,
@@ -22,12 +23,12 @@ Text: "${text}"
   try {
     const response = await queryLLM([{ role: 'user', content: extractionPrompt }]);
     const parsed = JSON.parse(response.text.replace(/```json/g, '').replace(/```/g, '').trim());
-    
+
     if (parsed.is_reminder && parsed.cron_expression) {
       cron.schedule(parsed.cron_expression, () => {
-        ctx.reply(`⏰ Reminder: ${parsed.message_to_send}`);
+        send(`⏰ Reminder: ${parsed.message_to_send}`);
       });
-      ctx.reply(`Got it! I've scheduled a reminder for: "${parsed.message_to_send}"`);
+      send(`Got it! I've scheduled a reminder for: "${parsed.message_to_send}"`);
       return true;
     }
   } catch (err) {

@@ -150,7 +150,7 @@ function startTelegramBot() {
     const { signal } = abortController;
 
     if (text.toLowerCase().includes('remind me')) {
-      const scheduled = await handleScheduling(text, ctx);
+      const scheduled = await handleScheduling(text, msg => ctx.reply(msg));
       if (scheduled) return;
     }
 

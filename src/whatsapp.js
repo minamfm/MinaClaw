@@ -13,6 +13,7 @@ const { queryLLMLoop }                         = require('./llm');
 const { transcribeVoice }                      = require('./llm');
 const { updateConfig, loadConfig }             = require('./config');
 const { connectToChromeAndLearn, learnFromDirectory } = require('./browser');
+const { handleScheduling }                     = require('./scheduler');
 const queue   = require('./command-queue');
 const session = require('./session');
 
@@ -311,6 +312,12 @@ async function processMessage(jid, text) {
   sock.sendPresenceUpdate('composing', jid).catch(() => {});
 
   const sessionId = 'wa:' + jid;
+
+  // Reminder scheduling — handle before LLM so the reminder fires back to WhatsApp
+  if (text.toLowerCase().includes('remind me')) {
+    const scheduled = await handleScheduling(text, msg => sendToJid(jid, msg));
+    if (scheduled) return;
+  }
 
   // Resumption check
   const history  = session.get(sessionId);
