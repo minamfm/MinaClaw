@@ -165,6 +165,36 @@ function parseResponse(text) {
   // 2. Depth-aware extraction — handles nested objects and JSON-in-strings
   const json = extractToolJson(text);
   if (isValidTool(json)) return json;
+
+  // 3. Qwen3 / generic <tool_call>JSON</tool_call> format
+  const toolCallMatch = text.match(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/i);
+  if (toolCallMatch) {
+    try {
+      const inner = JSON.parse(toolCallMatch[1]);
+      // Qwen format: { name: "...", arguments: {...} }
+      const mapped = inner.name ? { type: inner.name, ...(inner.arguments || {}) } : inner;
+      if (isValidTool(mapped)) return { ...mapped, _xmlFallback: true };
+    } catch { /* fall through */ }
+  }
+
+  // 4. <action>tool</action> <content>param</content> — seen with Qwen3-Coder
+  const actionMatch = text.match(/<action>\s*(\w+)\s*<\/action>\s*(?:<content>|<input>)\s*([\s\S]*?)\s*(?:<\/content>|<\/input>)/i);
+  if (actionMatch) {
+    const tool = actionMatch[1].trim();
+    const param = actionMatch[2].trim();
+    const xmlMapped = {
+      fetch_url:    () => ({ type: 'fetch_url',    url: param }),
+      internal_exec:() => ({ type: 'internal_exec', command: param }),
+      search_web:   () => ({ type: 'search_web',   query: param }),
+      send_telegram:() => ({ type: 'send_telegram', message: param }),
+      command_proposal: () => ({ type: 'command_proposal', command: param, explanation: 'Requested via tool call' }),
+    }[tool];
+    if (xmlMapped) {
+      const result = xmlMapped();
+      if (isValidTool(result)) return { ...result, _xmlFallback: true };
+    }
+  }
+
   return { type: 'text', response: text };
 }
 
@@ -172,18 +202,23 @@ function parseResponse(text) {
 // All accept an optional onChunk(accumulatedText) callback for streaming.
 // Returns { raw, usage, nativeToolCall? }
 
-async function queryOpenAI(messages, model, onChunk) {
-  const stream = await openai.chat.completions.create({
+async function queryOpenAI(messages, model, onChunk, onThinking, signal) {
+  // o-series reasoning models don't support parallel_tool_calls
+  const isReasoning = /^o[1-9][\w-]*/i.test(model);
+
+  const params = {
     model,
     messages,
     tools: OPENAI_TOOLS,
     tool_choice: 'auto',
-    parallel_tool_calls: false,
     stream: true,
     stream_options: { include_usage: true },
-  });
+    ...(isReasoning ? {} : { parallel_tool_calls: false }),
+  };
 
-  let text = '', toolCallId = '', toolCallName = '', toolCallArgs = '';
+  const stream = await openai.chat.completions.create(params, { signal });
+
+  let text = '', thinking = '', toolCallId = '', toolCallName = '', toolCallArgs = '';
   let isToolCall = false;
   let usage = { input: 0, output: 0 };
 
@@ -193,6 +228,10 @@ async function queryOpenAI(messages, model, onChunk) {
     }
     const delta = chunk.choices[0]?.delta;
     if (!delta) continue;
+    if (delta.reasoning_content) {
+      thinking += delta.reasoning_content;
+      if (onThinking) onThinking(thinking);
+    }
     if (delta.tool_calls?.length) {
       isToolCall = true;
       const tc = delta.tool_calls[0];
@@ -315,49 +354,123 @@ async function queryGemini(messages, model, onChunk) {
   return { raw: text, usage };
 }
 
-async function queryOllama(messages, model, onChunk) {
+async function queryOllama(messages, model, onChunk, onThinking, signal) {
   const url = process.env.OLLAMA_URL || 'http://host.docker.internal:11434';
-  try {
-    const response = await axios.post(
-      `${url}/api/chat`,
-      Object.assign({ model, messages, stream: true, keep_alive: '2h', options: { num_ctx: 16384 } },
-        /qwen3|deepseek-r1|qwq/i.test(model) ? { think: true } : {}),
-      { timeout: 600_000, responseType: 'stream' },
-    );
 
-    return await new Promise((resolve, reject) => {
-      let buf = '', text = '', thinking = '';
+  const streamRequest = async (body) => {
+    const response = await axios.post(`${url}/api/chat`, body, { timeout: 600_000, responseType: 'stream', signal });
+    return new Promise((resolve, reject) => {
+      let buf = '', text = '', thinking = '', resolved = false;
+      const safeResolve = (val) => { if (!resolved) { resolved = true; resolve(val); } };
 
       response.data.on('data', raw => {
         buf += raw.toString();
         const lines = buf.split('\n');
-        buf = lines.pop(); // keep incomplete line
+        buf = lines.pop();
         for (const line of lines) {
           if (!line.trim()) continue;
           let data; try { data = JSON.parse(line); } catch { continue; }
           if (data.message?.thinking) {
             thinking += data.message.thinking;
-            if (onChunk) onChunk('💭 ' + thinking);
+            if (onThinking) onThinking(thinking);
           }
           if (data.message?.content) {
             text += data.message.content;
             if (onChunk && text.length > 40 && !text.trimStart().startsWith('{')) onChunk(text);
           }
           if (data.done) {
-            if (thinking) console.log(`\n[ollama:think]\n${thinking}\n[/ollama:think]\n`);
+            // Strip inline <think>…</think> blocks that some models embed in content,
+            // route them to onThinking so the UI still shows them.
+            let finalText = text;
+            if (text.includes('<think>')) {
+              finalText = text.replace(/<think>[\s\S]*?<\/think>/gi, (match) => {
+                const thinkContent = match.replace(/<\/?think>/gi, '').trim();
+                if (thinkContent) {
+                  thinking += thinkContent;
+                  if (onThinking) onThinking(thinking);
+                }
+                return '';
+              }).trim();
+            }
+
+            if (finalText) console.log(`\n[ollama:think]\n${thinking}\n[/ollama:think]\n`);
+            else if (thinking) console.log(`\n[ollama:think]\n${thinking}\n[/ollama:think]\n`);
+
             const inputTok = data.prompt_eval_count || 0;
             const outputTok = data.eval_count || 0;
             console.log(`[ollama:tokens] prompt=${inputTok} gen=${outputTok} model=${model}`);
-            resolve({ raw: text, usage: { input: inputTok, output: outputTok } });
+
+            if (!finalText && thinking) {
+              // Model generated thinking but no content — its chat template forces <think> → EOS
+              // with no content phase. Use /api/generate (raw, no template) to extract the action.
+              // Mark resolved=true NOW so the on('end') event doesn't race ahead with empty text.
+              resolved = true;
+              console.warn(`[ollama] content empty after thinking — extracting action via /api/generate`);
+              // Signal telegram to freeze the thinking message while extraction runs
+              if (onThinking) onThinking('🔄 Extracting action...');
+              const extractPrompt = `You output a single JSON tool call and nothing else.
+
+Tools:
+{"type":"internal_exec","command":"SHELL_CMD"}
+{"type":"fetch_url","url":"URL","method":"GET"}
+{"type":"search_web","query":"QUERY"}
+{"type":"update_config","target":"config","key":"KEY","value":"VAL"}
+{"type":"send_telegram","message":"MSG"}
+
+Example:
+Reasoning: need to list files in /app
+Output: {"type":"internal_exec","command":"ls /app"}
+
+Reasoning: ${thinking.slice(-600)}
+Output:`;
+              axios.post(`${url}/api/generate`, {
+                model, raw: true, stream: false, format: 'json',
+                prompt: extractPrompt,
+                options: { num_predict: 128, num_ctx: 4096 },
+              }, { timeout: 120_000, signal }).then(r => {
+                const extracted = (r.data?.response || '').trim();
+                console.log(`[ollama] extracted action: ${extracted.slice(0, 200)}`);
+                resolve({ raw: extracted || thinking, usage: { input: inputTok, output: outputTok + (r.data?.eval_count || 0) } });
+              }).catch(err => {
+                console.warn(`[ollama] action extraction failed: ${err.message}`);
+                resolve({ raw: thinking, usage: { input: inputTok, output: outputTok } });
+              });
+            } else {
+              safeResolve({ raw: finalText, usage: { input: inputTok, output: outputTok } });
+            }
           }
         }
       });
 
-      response.data.on('error', reject);
-      // Fallback if done:true never arrives
-      response.data.on('end', () => resolve({ raw: text, usage: { input: 0, output: 0 } }));
+      response.data.on('error', err => {
+        if (signal?.aborted) {
+          safeResolve({ raw: text, usage: { input: 0, output: 0 }, aborted: true });
+        } else {
+          reject(err);
+        }
+      });
+      response.data.on('end', () => safeResolve({ raw: text, usage: { input: 0, output: 0 } }));
     });
+  };
+
+  const wantsThink = /qwen3|deepseek-r1|qwq/i.test(model);
+  const baseBody = { model, messages, stream: true, keep_alive: '15m', think: wantsThink, options: { num_ctx: 20000, num_predict: -1 } };
+
+  try {
+    return await streamRequest(baseBody);
   } catch (err) {
+    if (signal?.aborted) {
+      return { raw: '', usage: null, aborted: true };
+    }
+    // Retry without think:true if the model doesn't support it
+    if (wantsThink && err.response?.status === 400) {
+      console.warn(`[ollama] think:true rejected for ${model}, retrying without it`);
+      try {
+        return await streamRequest(baseBody);
+      } catch (retryErr) {
+        err = retryErr;
+      }
+    }
     if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
       const isLocal = url.includes('host.docker.internal') || url.includes('localhost') || url.includes('127.0.0.1');
       const explanation = isLocal
@@ -380,7 +493,7 @@ function buildOllamaSysPrompt(memoryContext) {
   const core = `\
 You are a personal AI agent running on the user's machine. Be direct, casual, and helpful.
 
-TOOLS — emit JSON to use a tool, plain text to reply:
+TOOLS — to use a tool emit ONLY the raw JSON object on its own line. No XML. No markdown. No <action> tags. No <tool_call> tags. Just the JSON:
 {"type":"internal_exec","command":"..."}                                    — shell cmd in your container (no approval needed)
 {"type":"fetch_url","url":"...","method":"GET","headers":{},"body":"..."}   — fetch URL / call API
 {"type":"search_web","query":"..."}                                         — web search
@@ -388,8 +501,13 @@ TOOLS — emit JSON to use a tool, plain text to reply:
 {"type":"command_proposal","command":"...","explanation":"..."}             — host command (needs user approval)
 {"type":"send_telegram","message":"..."}                                    — send Telegram message
 
-Container: Alpine Linux, running as root. Available: bash, curl, wget, jq, git, python3, node.
+WRONG: <action>fetch_url</action><content>https://example.com</content>
+RIGHT: {"type":"fetch_url","url":"https://example.com"}
+
+Container: Alpine Linux, running as root. Available: bash, curl, wget, jq, git, python3, node. Install Python packages with: pip3 install --break-system-packages <pkg>  (the flag is required on Alpine).
 Safe folders mounted at /mnt/safe. Config at /app/config. Skills at /app/skills.
+
+SCRIPTS: Save runnable scripts to /app/skills/<name>.py (persistent volume). NEVER put code inside .md files — they are reference docs, not scripts. NEVER run python3 on a .md file. To run a script: check ls /app/skills/*.py first, then python3 /app/skills/<name>.py.
 
 MEMORY: append <remember>note</remember> or replace <identity>full content</identity> at end of reply.
 RULES: Never narrate tool use — just emit the JSON. Chain as many tool calls as needed.`;
@@ -399,8 +517,8 @@ RULES: Never narrate tool use — just emit the JSON. Chain as many tool calls a
 
 // ─── queryLLM ─────────────────────────────────────────────────────────────────
 
-// Returns { text, usage, model, nativeToolCall? }
-async function queryLLM(messages, { onChunk } = {}) {
+// Returns { text, usage, model, nativeToolCall?, aborted? }
+async function queryLLM(messages, { onChunk, onThinking, signal } = {}) {
   const config      = loadConfig();
   const activeModel = config.activeModel;
   const modelName   = (config.models && config.models[activeModel]) || activeModel;
@@ -423,19 +541,24 @@ async function queryLLM(messages, { onChunk } = {}) {
   let result;
   try {
     switch (activeModel) {
-      case 'openai':    result = await queryOpenAI(fullMessages, modelName, onChunk);               break;
+      case 'openai':    result = await queryOpenAI(fullMessages, modelName, onChunk, onThinking, signal); break;
       case 'kimi':      result = await queryKimi(fullMessages, modelName, onChunk);                 break;
       case 'gemini':    result = await queryGemini(fullMessages, modelName, onChunk);               break;
-      case 'ollama':    result = await queryOllama(fullMessages, modelName, onChunk);               break;
+      case 'ollama':    result = await queryOllama(fullMessages, modelName, onChunk, onThinking, signal); break;
       case 'anthropic': result = await queryAnthropic(fullMessages, modelName, sysPrompt, onChunk); break;
       case 'mistral':   result = await queryMistral(fullMessages, modelName, onChunk);              break;
       case 'grok':      result = await queryGrok(fullMessages, modelName, onChunk);                 break;
       default:          throw new Error(`Unknown provider: ${activeModel}`);
     }
   } catch (err) {
+    if (signal?.aborted) {
+      return { text: '', usage: null, model: modelName, aborted: true };
+    }
     console.error(`LLM Error (${activeModel}/${modelName}):`, err);
     return { text: `Error communicating with ${activeModel}: ${err.message}`, usage: null, model: modelName, error: true };
   }
+
+  if (result.aborted) return { text: '', usage: result.usage, model: modelName, aborted: true };
 
   // Strip memory tags silently
   const { cleanText, remember, identity } = extractMemoryTags(result.raw);
@@ -447,7 +570,16 @@ async function queryLLM(messages, { onChunk } = {}) {
 
 // ─── Auto-compact ─────────────────────────────────────────────────────────────
 
-const COMPACT_AT = 60; // message count threshold to trigger compaction
+const CONTEXT_WINDOW  = 20_000;
+const COMPACT_AT_FRAC = 0.9;   // compact when estimated tokens exceed 90 % of context window
+const COMPACT_AT_TOKENS = Math.floor(CONTEXT_WINDOW * COMPACT_AT_FRAC); // 18 000
+
+function estimateTokens(msgs) {
+  return msgs.reduce((sum, m) => {
+    const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+    return sum + Math.ceil(content.length / 4);
+  }, 0);
+}
 
 async function compactHistory(msgs) {
   const transcript = msgs
@@ -470,16 +602,16 @@ async function compactHistory(msgs) {
  * msgs:        working message array for LLM calls (may contain native tool formats)
  * newMessages: simple text format only — safe to persist to session across provider changes
  */
-async function queryLLMLoop(messages, { onProgress, onChunk, sessionId } = {}) {
+async function queryLLMLoop(messages, { onProgress, onChunk, onThinking, signal, sessionId } = {}) {
   const MAX_STEPS  = 25;
   const WARN_STEP  = 22; // inject a wrap-up nudge before hard-stopping
   let msgs = [...messages];
 
-  // Auto-compact when conversation history grows too long
-  if (msgs.length >= COMPACT_AT) {
+  // Auto-compact when estimated token count approaches the context window limit
+  if (estimateTokens(msgs) >= COMPACT_AT_TOKENS) {
     try {
       if (onProgress) await Promise.resolve(onProgress('Compacting session history…')).catch(() => {});
-      console.log(`[compact] session=${sessionId} msgs=${msgs.length} — compacting`);
+      console.log(`[compact] session=${sessionId} msgs=${msgs.length} ~${estimateTokens(msgs)} tokens — compacting`);
       const summary = await compactHistory(msgs);
       const keepLast = msgs.slice(-6); // keep last 3 exchanges verbatim for immediate continuity
       msgs = [
@@ -497,6 +629,7 @@ async function queryLLMLoop(messages, { onProgress, onChunk, sessionId } = {}) {
   let totalUsage = null;
   let lastModel  = '';
   const steps = []; // for thinking.md
+  const recentToolKeys = []; // for loop detection (last 6 tool call fingerprints)
 
   for (let i = 0; i < MAX_STEPS; i++) {
     // Nudge the agent to wrap up gracefully before hitting the hard limit
@@ -504,12 +637,23 @@ async function queryLLMLoop(messages, { onProgress, onChunk, sessionId } = {}) {
       msgs = [...msgs, { role: 'user', content: 'You are close to the tool call limit. Wrap up what you have and give your final answer now — do not call any more tools.' }];
     }
 
-    const result = await queryLLM(msgs, { onChunk });
+    if (signal?.aborted) {
+      if (sessionId) session.clearThinking(sessionId);
+      return { text: '', usage: totalUsage, model: lastModel, parsed: { type: 'text', response: '' }, newMessages, aborted: true };
+    }
+
+    const result = await queryLLM(msgs, { onChunk, onThinking, signal });
     lastModel = result.model;
     if (result.usage) {
       if (!totalUsage) totalUsage = { input: 0, output: 0 };
       totalUsage.input  += result.usage.input;
       totalUsage.output += result.usage.output;
+    }
+
+    // If aborted (new message from user), stop silently
+    if (result.aborted) {
+      if (sessionId) session.clearThinking(sessionId);
+      return { text: '', usage: totalUsage, model: lastModel, parsed: { type: 'text', response: '' }, newMessages, aborted: true };
     }
 
     // If the LLM itself errored mid-loop, surface what was completed so far
@@ -528,6 +672,19 @@ async function queryLLMLoop(messages, { onProgress, onChunk, sessionId } = {}) {
       newMessages.push({ role: 'assistant', content: result.text });
       if (sessionId) session.clearThinking(sessionId);
       return { text: result.text, usage: totalUsage, model: lastModel, parsed, newMessages };
+    }
+
+    // Loop detection — fingerprint this tool call and break immediately on repeat
+    const toolKey = parsed.type + ':' + (parsed.url || parsed.command || parsed.query || parsed.key || '');
+    recentToolKeys.push(toolKey);
+    if (recentToolKeys.length > 6) recentToolKeys.shift();
+    const repeatCount = recentToolKeys.filter(k => k === toolKey).length;
+    if (repeatCount >= 2) {
+      const loopText = `I got stuck repeating the same tool call (\`${toolKey}\`) and stopped myself. I may not have enough information to complete this task — could you provide more context or clarify what you need?`;
+      console.warn(`[loop-detect] forced exit on repeat: ${toolKey}`);
+      newMessages.push({ role: 'assistant', content: loopText });
+      if (sessionId) session.clearThinking(sessionId);
+      return { text: loopText, usage: totalUsage, model: lastModel, parsed: { type: 'text', response: loopText }, newMessages };
     }
 
     // Execute tool
@@ -553,6 +710,8 @@ async function queryLLMLoop(messages, { onProgress, onChunk, sessionId } = {}) {
 
     // Progress notification (Telegram live update)
     if (onProgress) await Promise.resolve(onProgress(label)).catch(() => {});
+    // Reset thinking display between tool steps — next step will create a fresh message
+    if (onThinking) onThinking(null);
 
     // Save task state to disk so it survives daemon crashes or tool call limit hits
     if (sessionId) {
@@ -570,7 +729,10 @@ async function queryLLMLoop(messages, { onProgress, onChunk, sessionId } = {}) {
       ].join('\n'));
     }
 
-    const outputMsg = `${label} result:\n\`\`\`\n${output}\n\`\`\``;
+    const formatReminder = parsed._xmlFallback
+      ? `\n\n⚠️ FORMAT REMINDER: You used XML tags for that tool call. Always use plain JSON instead:\n{"type":"${parsed.type}","${parsed.url ? 'url":"' + parsed.url : parsed.command ? 'command":"' + parsed.command : 'query":"' + (parsed.query || '')}"}  — never use <action> or <tool_call> tags.`
+      : '';
+    const outputMsg = `${label} result:\n\`\`\`\n${output}\n\`\`\`${formatReminder}`;
 
     // Session persistence — always simple text
     newMessages.push({ role: 'assistant', content: result.text });

@@ -119,9 +119,23 @@ function startTelegramBot() {
 
   const LIMIT_FALLBACK = 'I ran too many internal commands trying to answer that. Please ask me to continue.';
 
+  // Track in-flight requests so a new message can abort the previous one
+  const activeRequests = new Map();
+
   bot.on('text', async (ctx) => {
     const text      = ctx.message.text;
     const sessionId = ctx.chat.id.toString();
+
+    // Abort any in-flight request for this session
+    const prev = activeRequests.get(sessionId);
+    if (prev) {
+      console.log(`[abort] session=${sessionId} — new message aborting in-flight request`);
+      prev.abort();
+      activeRequests.delete(sessionId);
+    }
+    const abortController = new AbortController();
+    activeRequests.set(sessionId, abortController);
+    const { signal } = abortController;
 
     // Persist the user's chat ID so the agent can message them proactively
     updateConfig({ telegramChatId: ctx.chat.id });
@@ -150,6 +164,38 @@ function startTelegramBot() {
         if (msg) progressMsgId = msg.message_id;
       } else {
         await ctx.telegram.editMessageText(ctx.chat.id, progressMsgId, null, body).catch(() => {});
+      }
+    };
+
+    // Thinking message — created on first thinking chunk, collapsed to 💭 when done
+    let thinkingMsgId     = null;
+    let thinkingCreating  = false;
+    let thinkingLastEdit  = 0;
+
+    const onThinking = (accumulated) => {
+      // null = reset signal between tool steps: collapse current message and clear for next step
+      if (accumulated === null) {
+        if (thinkingMsgId) {
+          ctx.telegram.editMessageText(ctx.chat.id, thinkingMsgId, null, '\u{1F4AD}').catch(() => {});
+          thinkingMsgId = null;
+          thinkingLastEdit = 0;
+        }
+        return;
+      }
+      const preview = accumulated.length > 800 ? '\u2026' + accumulated.slice(-800) : accumulated;
+      const body = `\u{1F4AD} Thinking...\n\n${preview}`;
+      const now = Date.now();
+      if (!thinkingMsgId && !thinkingCreating) {
+        thinkingCreating = true;
+        ctx.reply(body).then(msg => {
+          if (msg) { thinkingMsgId = msg.message_id; thinkingLastEdit = Date.now(); }
+          thinkingCreating = false;
+        }).catch(() => { thinkingCreating = false; });
+        return;
+      }
+      if (thinkingMsgId && now - thinkingLastEdit >= 1500) {
+        ctx.telegram.editMessageText(ctx.chat.id, thinkingMsgId, null, body).catch(() => {});
+        thinkingLastEdit = now;
       }
     };
 
@@ -192,7 +238,7 @@ function startTelegramBot() {
       if (!progressSent && !streamMsgId) {
         await ctx.reply('⏳ Working on it…').catch(() => {});
       }
-    }, 5_000);
+    }, 20_000);
 
     // Check for resumption context: tool call limit hit OR crash mid-task
     const history   = session.get(sessionId);
@@ -213,9 +259,28 @@ function startTelegramBot() {
     }
 
     try {
-      const { text: llmText, usage, parsed, newMessages, hitLimit } = await queryLLMLoop(messages, { onProgress, onChunk, sessionId });
+      const { text: llmText, usage, parsed, newMessages, hitLimit, aborted } = await queryLLMLoop(messages, { onProgress, onChunk, onThinking, signal, sessionId });
       clearInterval(typingInterval);
       clearTimeout(workingTimer);
+      activeRequests.delete(sessionId);
+
+      // Collapse thinking message now that the answer is ready
+      if (thinkingMsgId) {
+        await ctx.telegram.editMessageText(ctx.chat.id, thinkingMsgId, null, '\u{1F4AD}').catch(() => {});
+      }
+
+      // New message arrived and aborted this request — mark partial output and stop
+      if (aborted) {
+        console.log(`[abort] session=${sessionId} — request completed as aborted`);
+        if (streamMsgId) {
+          const body = streamText ? `${streamText}\n\n_(interrupted)_` : '_(interrupted)_';
+          ctx.telegram.editMessageText(ctx.chat.id, streamMsgId, null, body).catch(() => {});
+        }
+        if (progressMsgId) {
+          ctx.telegram.editMessageText(ctx.chat.id, progressMsgId, null, '⚠️ Interrupted\n\n' + progressLines.join('\n')).catch(() => {});
+        }
+        return;
+      }
 
       // Update the progress message to final state
       if (progressMsgId) {
@@ -273,6 +338,10 @@ function startTelegramBot() {
     } catch (err) {
       clearInterval(typingInterval);
       clearTimeout(workingTimer);
+      activeRequests.delete(sessionId);
+      if (thinkingMsgId) {
+        ctx.telegram.editMessageText(ctx.chat.id, thinkingMsgId, null, '\u{1F4AD}').catch(() => {});
+      }
       console.error('Bot handler error:', err);
       ctx.reply('Sorry, something went wrong on my end. Please try again.').catch(() => {});
     }

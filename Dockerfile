@@ -13,7 +13,9 @@ RUN apk add --no-cache \
     wget \
     jq \
     git \
-    python3
+    python3 \
+    py3-pip \
+    py3-requests
 
 # Tell Playwright where to find the local chromium
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1

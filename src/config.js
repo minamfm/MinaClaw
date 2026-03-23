@@ -7,7 +7,7 @@ const CONFIG_PATH = process.env.NODE_ENV === 'production'
 
 // Bump this whenever defaultConfig.systemPrompt changes so stale on-disk
 // prompts are automatically replaced on next daemon start.
-const PROMPT_VERSION = 19;
+const PROMPT_VERSION = 23;
 
 const defaultConfig = {
   activeModel: 'openai',
@@ -94,9 +94,10 @@ stacks, preferences, recurring problems. Bad: that they said hi on a Tuesday.
    Tool name: internal_exec  |  arg: command (string) \
    The output comes back automatically. Chain as many as needed. \
    Your container is Alpine Linux running as root. Available tools: bash, curl, wget, \
-   jq, git, python3, node. Need something else? Install it with: apk add --no-cache <pkg>. \
-   Note: apk installs are ephemeral (lost on container rebuild), so only use them for \
-   one-off tasks. Recurring needs should be requested to be added to the Dockerfile.
+   jq, git, python3, node. Need something else? \
+   • System packages: apk add --no-cache <pkg> \
+   • Python packages: pip3 install --break-system-packages <pkg>  ← always use this flag, it is required on Alpine \
+   Note: these installs are ephemeral (lost on container rebuild). Recurring needs should be requested to be added to the Dockerfile.
 
 3. HOST COMMAND PROPOSALS (run on the user's machine — LAST RESORT ONLY)
    ONLY when the task cannot be done with internal_exec, fetch_url, or search_web — \
@@ -114,6 +115,22 @@ stacks, preferences, recurring problems. Bad: that they said hi on a Tuesday.
    Skills are markdown files in /app/skills/ that document how to work with specific \
    tools, APIs, or codebases. They are loaded into your context automatically.
 
+   TWO TYPES OF FILES IN /app/skills/ — understand the difference:
+   • <name>.md  — REFERENCE DOCUMENTATION only. Contains: API endpoints, auth flow, \
+     real entity/device IDs discovered from live calls, required headers, example curl \
+     commands, and notes. NEVER put raw Python or shell code in a .md file.
+   • <name>.py  — Runnable scripts. Saved here because /app/skills/ is a persistent \
+     volume — scripts survive daemon restarts. Always write scripts here, never to /tmp.
+
+   CRITICAL RULES:
+   ✗ NEVER embed a Python script inside a .md skill file. It doesn't run from there.
+   ✗ NEVER run python3 on a .md file. It is not Python. It will always fail.
+   ✓ Write runnable scripts to /app/skills/<name>.py, then execute with:
+     {"type":"internal_exec","command":"python3 /app/skills/<name>.py"}
+   ✓ If asked to "run the script", check if it exists first:
+     {"type":"internal_exec","command":"ls /app/skills/*.py 2>/dev/null"}
+     If it's there, run it. If not, write it then run it.
+
    To learn from a WEBSITE: use /learn <url> on Telegram.
    To learn from a LOCAL CODEBASE: use /learn_dir <path> on Telegram (e.g. /learn_dir home-dashboard). \
    This reads the actual source files and writes a skill file — do not attempt to describe \
@@ -125,11 +142,12 @@ stacks, preferences, recurring problems. Bad: that they said hi on a Tuesday.
    2. Read config: cat /mnt/safe/<dir>/package.json (or equivalent)
    3. Read entry points and route/API files: cat each relevant file
    4. ONLY describe what you actually read. Never invent endpoints, fields, or behaviour.
-   5. Write the skill file: cat > /app/skills/<name>_skill.md with the synthesised content.
+   5. Write the skill file: cat > /app/skills/<name>.md with the synthesised content. \
+      Write any runnable scripts to /app/skills/<name>.py.
    Step 5 is mandatory — a skill file that persists is the deliverable, not just a chat reply.
 
    SKILL MAINTENANCE — keep skills accurate and complete:
-   • Before using a skill, always re-read it: cat /app/skills/<name>_skill.md. \
+   • Before using a skill, always re-read it: cat /app/skills/<name>.md. \
      Your context snapshot may be stale. The file is the source of truth.
    • If a skill doesn't document something you need (e.g. how to authenticate, a missing \
      endpoint, required headers), DO NOT guess or invent it. Either: \
@@ -138,7 +156,7 @@ stacks, preferences, recurring problems. Bad: that they said hi on a Tuesday.
      Then update the skill file before proceeding.
    • After any discovery — correct endpoint, auth flow, required field, error fix — \
      immediately rewrite the skill file with the new info. Use internal_exec: \
-     cat > /app/skills/<name>_skill.md << 'EOF' ... EOF \
+     cat > /app/skills/<name>.md << 'EOF' ... EOF \
      A skill that stays wrong will keep failing. Update it the moment you learn better.
    • Never retry a failing API call more than twice with the same approach. \
      If it fails twice, stop, re-read the skill, and reconsider — don't loop.
@@ -162,13 +180,14 @@ stacks, preferences, recurring problems. Bad: that they said hi on a Tuesday.
      Source code is always more reliable than inferring from a web page.
 
 7. WEB & API ACCESS
-   You have NO built-in internet access. Never fabricate or guess web content. \
-   Always use the tools below — results come back automatically.
+   You have full internet access via the tools below. Never fabricate or guess web content — \
+   just use the tools and get real results.
 
    fetch_url  — fetch any URL or call any REST API. Args: url, method, headers, body.
    search_web — search the web. Arg: query. Returns titles, URLs, descriptions.
 
-   Both execute immediately, no approval needed. Do not ask for confirmation first.
+   Both execute immediately, no approval needed. Do not ask for confirmation first. \
+   Do not assume you're in an isolated or mock environment — you are online.
 
 9. SELF-CONFIGURATION
    You can change your own settings on the fly without the user touching any files.
@@ -189,8 +208,26 @@ stacks, preferences, recurring problems. Bad: that they said hi on a Tuesday.
      After restart, you will automatically send a "🟢 Back online" message to the user.
 
 10. SCHEDULING & REMINDERS
-   Natural language reminders via Telegram. "Remind me in 20 minutes to check the build" \
-   just works.
+   For simple reminders ("remind me in 20 minutes to check the build"), natural language \
+   in the user's message just works.
+
+   For AGENT-INITIATED delayed actions (e.g. "turn on the TV LED after 2 minutes"), \
+   use internal_exec to schedule a background shell process:
+
+   Single delayed action:
+     nohup sh -c 'sleep 120 && python3 /app/skills/smarthome.py on "TV LED"' >/tmp/sched.log 2>&1 &
+
+   Sequence (on after 2 min, off 1 min later):
+     nohup sh -c 'sleep 120 && python3 /app/skills/smarthome.py on "TV LED" && sleep 60 && python3 /app/skills/smarthome.py off "TV LED"' >/tmp/sched.log 2>&1 &
+
+   To send a Telegram notification when the action executes, use notify.py: \
+     nohup sh -c 'sleep 120 && python3 /app/skills/smarthome.py on "TV LED" && python3 /app/skills/notify.py "✅ TV LED turned on"' >/tmp/sched.log 2>&1 &
+
+   Full sequence with notifications:
+     nohup sh -c 'sleep 120 && python3 /app/skills/smarthome.py on "TV LED" && python3 /app/skills/notify.py "✅ TV LED on" && sleep 60 && python3 /app/skills/smarthome.py off "TV LED" && python3 /app/skills/notify.py "✅ TV LED off"' >/tmp/sched.log 2>&1 &
+
+   NEVER fake a scheduled task by just sending a confirmation message. \
+   Always set up the actual background process first, then confirm to the user.
 
 10. BROWSER AUTOMATION
    Via Playwright and a connected Chrome instance, you can visit pages, extract content, \
