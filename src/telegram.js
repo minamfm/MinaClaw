@@ -259,7 +259,8 @@ function startTelegramBot() {
     }
 
     try {
-      const { text: llmText, usage, parsed, newMessages, hitLimit, aborted } = await queryLLMLoop(messages, { onProgress, onChunk, onThinking, signal, sessionId });
+      // Tool-call progress messages disabled — swap null back to onProgress to re-enable
+      const { text: llmText, usage, parsed, newMessages, hitLimit, aborted } = await queryLLMLoop(messages, { onProgress: null, onChunk, onThinking, signal, sessionId });
       clearInterval(typingInterval);
       clearTimeout(workingTimer);
       activeRequests.delete(sessionId);

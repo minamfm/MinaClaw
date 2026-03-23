@@ -37,16 +37,17 @@ MinaClaw is a **two-tier system**:
 | File | Role |
 |---|---|
 | `config.js` | Reads/writes `config/config.json` (active model, system prompt). Path is `/app/config/config.json` in production, local `config.json` in dev. |
-| `llm.js` | Unified `queryLLM(messages)` that dispatches to OpenAI, Gemini (gemini-2.5-flash), Kimi/Moonshot, or Ollama based on `activeModel` in config. |
-| `telegram.js` | Telegraf bot. Commands: `/model <name>`, `/learn <url>`, `/sh <cmd>`. Free-text messages route to `queryLLM`; messages containing "remind me" are intercepted by the scheduler. |
+| `llm.js` | Unified `queryLLM(messages)` that dispatches to OpenAI, Gemini, Kimi/Moonshot, Ollama, Mistral, Grok based on `activeModel` in config. |
+| `telegram.js` | Telegraf bot. Commands: `/model <name>`, `/learn <url>`, `/sh <cmd>`. Free-text messages route to `queryLLM`; messages containing "remind me" are intercepted by the scheduler. Supports streaming (`onChunk`), thinking display (`onThinking`), and tool-call progress messages (`onProgress`) — progress messages are currently **disabled** (pass `null` to `queryLLMLoop`; swap back to `onProgress` to re-enable). |
 | `scheduler.js` | Sends the user's reminder text to the LLM to extract a cron expression + message, then schedules it with `node-cron`. Jobs are **in-memory only** — lost on daemon restart. |
 | `browser.js` | Connects to a remote Chrome instance via Playwright CDP (`CHROME_CDP_URL`), visits a URL, extracts page text, asks the LLM to generate a skill markdown file, and saves it to `skills/<domain>_skill.md`. |
 | `tools.js` | `executeShellCommand` (10s timeout, minimal blocklist), `readFile`/`writeFile` confined to `/mnt/safe` in production via `resolvePath`. |
 
 ### Configuration & secrets
 
-- **API keys** (`config/.env`): `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `KIMI_API_KEY`
-- **Runtime config** (`config/config.json`): `activeModel` (openai/gemini/kimi/ollama), `systemPrompt`
+- **API keys** (`config/.env`): `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `KIMI_API_KEY`, `MISTRAL_API_KEY`, `GROK_API_KEY`
+- **Runtime config** (`config/config.json`): `activeModel` (openai/gemini/kimi/ollama/anthropic/mistral/grok), `systemPrompt`
+- **Kimi base URL**: `https://api.moonshot.ai/v1` (not `.cn`). Model: `kimi-k2.5`. Thinking disabled server-side via `extra_body: { thinking: { type: 'disabled' } }`.
 - **Optional env vars**: `CHROME_CDP_URL` (default: `ws://localhost:9222`), `OLLAMA_URL` (default: `http://localhost:11434`)
 - Both `config/` and `skills/` are mounted into the container as volumes so they persist across restarts.
 
