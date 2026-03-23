@@ -180,6 +180,11 @@ const KIMI_MODELS = [
   { value: 'moonshot-v1-8k',         label: 'moonshot-v1-8k',         hint: 'legacy, 8K context' },
 ];
 
+const DEEPSEEK_MODELS = [
+  { value: 'deepseek-chat',     label: 'deepseek-chat',     hint: 'DeepSeek V3 — fast, cheap, strong coding' },
+  { value: 'deepseek-reasoner', label: 'deepseek-reasoner', hint: 'DeepSeek R1 — chain-of-thought reasoning' },
+];
+
 // ─── Main menu ────────────────────────────────────────────────────────────────
 
 async function mainMenu() {
@@ -264,6 +269,10 @@ async function configureMenu() {
           label: `Kimi (Moonshot)  ${apiBadge(env, 'KIMI_API_KEY', config.models.kimi)}`,
         },
         {
+          value: 'deepseek',
+          label: `DeepSeek  ${apiBadge(env, 'DEEPSEEK_API_KEY', config.models.deepseek)}`,
+        },
+        {
           value: 'ollama',
           label: `Ollama  ${green('● ' + config.models.ollama)}`,
           hint: env.OLLAMA_URL_DISPLAY || 'http://localhost:11434',
@@ -297,6 +306,7 @@ async function configureMenu() {
         case 'mistral':   await configureMistral(); break;
         case 'grok':      await configureGrok(); break;
         case 'kimi':      await configureKimi(); break;
+        case 'deepseek':  await configureDeepSeek(); break;
         case 'ollama':    await configureOllama(); break;
         case 'active':    await selectActiveModel(); break;
         case 'prompt':    await editSystemPrompt(); break;
@@ -446,6 +456,26 @@ async function configureKimi() {
   config.models.kimi = model;
   saveConfig(config);
   log.success(`Kimi set to ${model}.`);
+}
+
+async function configureDeepSeek() {
+  const env = loadEnv();
+  const config = loadConfig();
+  note(
+    env.DEEPSEEK_API_KEY ? `Currently configured: ${env.DEEPSEEK_API_KEY.slice(0, 8)}…` : 'Not configured yet.',
+    'DeepSeek'
+  );
+  const key = orCancel(await password({ message: 'API Key (leave blank to keep existing):' }));
+  if (key) { env.DEEPSEEK_API_KEY = key; saveEnv(env); log.success('API key saved.'); }
+
+  const model = orCancel(await select({
+    message: 'Default model:',
+    options: DEEPSEEK_MODELS,
+    initialValue: config.models.deepseek,
+  }));
+  config.models.deepseek = model;
+  saveConfig(config);
+  log.success(`DeepSeek set to ${model}.`);
 }
 
 async function configureOllama() {
@@ -732,6 +762,7 @@ async function selectActiveModel() {
       { value: 'mistral',   label: label('mistral',   'MISTRAL_API_KEY') },
       { value: 'grok',      label: label('grok',      'XAI_API_KEY') },
       { value: 'kimi',      label: label('kimi',      'KIMI_API_KEY') },
+      { value: 'deepseek',  label: label('deepseek',  'DEEPSEEK_API_KEY') },
       { value: 'ollama',    label: label('ollama',    null) },
     ],
   }));

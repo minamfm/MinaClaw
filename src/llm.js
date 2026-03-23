@@ -28,6 +28,12 @@ const grok = new OpenAI({
   baseURL: 'https://api.x.ai/v1',
 });
 
+// DeepSeek — OpenAI-compatible
+const deepseek = new OpenAI({
+  apiKey: process.env.DEEPSEEK_API_KEY,
+  baseURL: 'https://api.deepseek.com/v1',
+});
+
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const gemini = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -304,6 +310,65 @@ async function queryGrok(messages, model, onChunk) {
   return queryOpenAICompat(grok, messages, model, onChunk);
 }
 
+async function queryDeepSeek(messages, model, onChunk, onThinking, signal) {
+  const isReasoner = /reasoner/i.test(model);
+  const params = {
+    model,
+    messages,
+    tools: OPENAI_TOOLS,
+    tool_choice: 'auto',
+    stream: true,
+    stream_options: { include_usage: true },
+    ...(isReasoner ? {} : { parallel_tool_calls: false }),
+  };
+  const stream = await deepseek.chat.completions.create(params, { signal });
+
+  let text = '', thinking = '', toolCallId = '', toolCallName = '', toolCallArgs = '';
+  let isToolCall = false;
+  let usage = { input: 0, output: 0 };
+
+  for await (const chunk of stream) {
+    if (chunk.usage) {
+      usage = { input: chunk.usage.prompt_tokens, output: chunk.usage.completion_tokens };
+    }
+    const delta = chunk.choices[0]?.delta;
+    if (!delta) continue;
+    if (delta.reasoning_content) {
+      thinking += delta.reasoning_content;
+      if (onThinking) onThinking(thinking);
+    }
+    if (delta.tool_calls?.length) {
+      isToolCall = true;
+      const tc = delta.tool_calls[0];
+      if (tc.id)                  toolCallId   += tc.id;
+      if (tc.function?.name)      toolCallName += tc.function.name;
+      if (tc.function?.arguments) toolCallArgs += tc.function.arguments;
+    } else if (delta.content) {
+      text += delta.content;
+      if (onChunk) onChunk(text);
+    }
+  }
+
+  if (isToolCall) {
+    let args = {};
+    try { args = JSON.parse(toolCallArgs); } catch {}
+    return {
+      raw: JSON.stringify({ type: toolCallName, ...args }),
+      usage,
+      nativeToolCall: {
+        provider: 'openai',
+        toolCallId,
+        assistantMsg: {
+          role: 'assistant', content: null,
+          tool_calls: [{ id: toolCallId, type: 'function',
+            function: { name: toolCallName, arguments: toolCallArgs } }],
+        },
+      },
+    };
+  }
+  return { raw: text, usage };
+}
+
 async function queryAnthropic(messages, model, sysPrompt, onChunk) {
   const chatMessages = messages.filter(m => m.role !== 'system');
   const stream = anthropic.messages.stream({
@@ -574,6 +639,7 @@ async function queryLLM(messages, { onChunk, onThinking, signal, sessionId } = {
       case 'anthropic': result = await queryAnthropic(fullMessages, modelName, sysPrompt, onChunk); break;
       case 'mistral':   result = await queryMistral(fullMessages, modelName, onChunk);              break;
       case 'grok':      result = await queryGrok(fullMessages, modelName, onChunk);                 break;
+      case 'deepseek':  result = await queryDeepSeek(fullMessages, modelName, onChunk, onThinking, signal); break;
       default:          throw new Error(`Unknown provider: ${activeModel}`);
     }
   } catch (err) {

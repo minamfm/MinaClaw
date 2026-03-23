@@ -22,7 +22,7 @@ function startTelegramBot() {
     const cfg = loadConfig();
     const active = cfg.activeModel;
     const models = cfg.models || {};
-    const providers = ['openai', 'anthropic', 'gemini', 'mistral', 'grok', 'kimi', 'ollama'];
+    const providers = ['openai', 'anthropic', 'gemini', 'mistral', 'grok', 'kimi', 'deepseek', 'ollama'];
     const lines = providers.map(p => {
       const mark = p === active ? '▶' : ' ';
       const name = models[p] || '(default)';
@@ -37,7 +37,7 @@ function startTelegramBot() {
     const args = ctx.message.text.split(' ').filter(Boolean);
     if (args.length > 1) {
       const newModel = args[1].toLowerCase();
-      const valid = ['openai', 'anthropic', 'gemini', 'mistral', 'grok', 'kimi', 'ollama'];
+      const valid = ['openai', 'anthropic', 'gemini', 'mistral', 'grok', 'kimi', 'deepseek', 'ollama'];
       if (valid.includes(newModel)) {
         updateConfig({ activeModel: newModel });
         return ctx.reply(modelStatus(), { parse_mode: 'Markdown' });

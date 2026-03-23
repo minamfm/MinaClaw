@@ -81,11 +81,9 @@
     td { padding: 8px 10px; border-top: 1px solid var(--border); }
     tr:hover td { background: var(--bg3); }
 
-    /* ── Tags ── */
-    .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-    .tag { background: var(--bg3); border: 1px solid var(--border); padding: 3px 10px; border-radius: 20px; font-size: 13px; display: flex; align-items: center; gap: 5px; }
-    .tag button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; }
-    .tag button:hover { color: var(--error); }
+    /* ── Number list ── */
+    .num-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+    .num-row { display: flex; align-items: center; justify-content: space-between; background: var(--bg3); border: 1px solid var(--border); padding: 8px 12px; border-radius: 6px; font-size: 13px; font-family: monospace; }
 
     /* ── Models ── */
     .model-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); }
@@ -141,7 +139,8 @@
         <div class="field"><label>Switch provider</label>
           <select id="model-sel" class="inp">
             <option>openai</option><option>anthropic</option><option>gemini</option>
-            <option>mistral</option><option>grok</option><option>kimi</option><option>ollama</option>
+            <option>mistral</option><option>grok</option><option>kimi</option>
+            <option>deepseek</option><option>ollama</option>
           </select>
         </div>
         <button class="btn" onclick="switchProvider()">Switch</button>
@@ -150,7 +149,7 @@
     <div class="card">
       <h3>Model Names</h3>
       <div id="model-list"><span class="spin"></span></div>
-      <button class="btn" style="margin-top:12px;" onclick="saveModels()">Save names</button>
+      <button class="btn" style="margin-top:12px;" onclick="saveModels()">Save</button>
     </div>
   </div>
 
@@ -176,7 +175,7 @@
         <div class="field"><input id="bind-num" class="inp" placeholder="e.g. 201234567890 or +201234567890"></div>
         <button class="btn" onclick="waBind()">Add</button>
       </div>
-      <div id="wa-numbers" class="tags"></div>
+      <div id="wa-numbers" class="num-list"></div>
     </div>
   </div>
 
@@ -318,21 +317,47 @@ async function sendChat() {
 
 // ── Models ─────────────────────────────────────────────────────────────────────
 
+const KNOWN_MODELS = {
+  openai:    ['gpt-5.4','gpt-5.4-mini','gpt-5.4-nano','gpt-4.1','gpt-4.1-mini','gpt-4.1-nano','gpt-4o','gpt-4o-mini','o3','o4-mini','o3-mini','o3-pro','o1'],
+  anthropic: ['claude-opus-4-6','claude-sonnet-4-6','claude-haiku-4-5-20251001'],
+  gemini:    ['gemini-2.5-flash','gemini-2.5-pro','gemini-1.5-flash','gemini-1.5-pro'],
+  mistral:   ['mistral-large-2411','mistral-medium-latest','mistral-small-latest','magistral-medium-latest','magistral-small-latest','codestral-latest'],
+  grok:      ['grok-4.1','grok-4.1-mini','grok-4.1-fast-reasoning','grok-4.1-fast-non-reasoning','grok-3-beta'],
+  kimi:      ['kimi-k2.5','kimi-k2-thinking','kimi-k2-thinking-turbo','moonshot-v1-128k','moonshot-v1-32k','moonshot-v1-8k'],
+  deepseek:  ['deepseek-chat','deepseek-reasoner'],
+  ollama:    [],
+};
+
+function buildModelSelect(provider, current, options) {
+  const opts = options.map(m =>
+    `<option value="${esc(m)}"${m === current ? ' selected' : ''}>${esc(m)}</option>`
+  ).join('');
+  // If current value isn't in the list, prepend it so it shows as selected
+  const inList = options.includes(current);
+  const extra = (!inList && current) ? `<option value="${esc(current)}" selected>${esc(current)}</option>` : '';
+  return `<select class="inp" id="mn-${provider}" style="flex:1;">${extra}${opts}</select>`;
+}
+
 async function loadModels() {
   try {
-    const cfg = await api('GET', '/config');
+    const [cfg, ollamaModels] = await Promise.all([
+      api('GET', '/config'),
+      api('GET', '/ollama/models').catch(() => []),
+    ]);
     const { activeModel, models = {} } = cfg;
+
+    KNOWN_MODELS.ollama = ollamaModels.length ? ollamaModels : (models.ollama ? [models.ollama] : ['llama3']);
 
     document.getElementById('active-badge').innerHTML =
       `<span class="badge green">▶ ${esc(activeModel)}</span> &nbsp;${esc(models[activeModel] || '(default)')}`;
     document.getElementById('model-sel').value = activeModel;
 
-    const providers = ['openai','anthropic','gemini','mistral','grok','kimi','ollama'];
+    const providers = ['openai','anthropic','gemini','mistral','grok','kimi','deepseek','ollama'];
     document.getElementById('model-list').innerHTML = providers.map(p => `
       <div class="model-row">
         <span class="model-label">${p}</span>
-        ${p === activeModel ? '<span class="badge green" style="flex-shrink:0;font-size:11px;">active</span>' : '<span style="min-width:46px;"></span>'}
-        <input class="inp" id="mn-${p}" style="flex:1;" value="${esc(models[p] || '')}" placeholder="(default)">
+        ${p === activeModel ? '<span class="badge green" style="flex-shrink:0;font-size:11px;">active</span>' : '<span style="min-width:46px;display:inline-block;"></span>'}
+        ${buildModelSelect(p, models[p] || KNOWN_MODELS[p]?.[0] || '', KNOWN_MODELS[p] || [])}
       </div>
     `).join('');
   } catch (e) {
@@ -349,10 +374,11 @@ async function switchProvider() {
 }
 
 async function saveModels() {
-  const providers = ['openai','anthropic','gemini','mistral','grok','kimi','ollama'];
+  const providers = ['openai','anthropic','gemini','mistral','grok','kimi','deepseek','ollama'];
   const models = {};
   providers.forEach(p => {
-    const v = document.getElementById('mn-' + p)?.value.trim();
+    const el = document.getElementById('mn-' + p);
+    const v = el?.value?.trim();
     if (v) models[p] = v;
   });
   await api('POST', '/config', { models });
@@ -396,8 +422,12 @@ TAB_LOADERS.whatsapp = loadWhatsApp;
 
 function renderNumbers(nums) {
   document.getElementById('wa-numbers').innerHTML = nums.length
-    ? nums.map(n => `<span class="tag">${esc(n)}<button onclick="waUnbind('${esc(n)}')">×</button></span>`).join('')
-    : '<span style="color:var(--muted);font-size:13px;">No numbers bound yet.</span>';
+    ? nums.map(n => `
+        <div class="num-row">
+          <span>${esc(n)}</span>
+          <button class="btn red sm" onclick="waUnbind('${esc(n)}')">Remove</button>
+        </div>`).join('')
+    : '<p style="color:var(--muted);font-size:13px;padding:6px 0;">No numbers bound yet.</p>';
 }
 
 async function waBind() {

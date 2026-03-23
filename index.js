@@ -1,12 +1,14 @@
 require('dotenv').config({ path: './config/.env' });
 const express    = require('express');
 const bodyParser = require('body-parser');
+const axios      = require('axios');
 const fs         = require('fs');
 const path       = require('path');
 const { startTelegramBot }                     = require('./src/telegram');
 const { startWhatsAppBot, getStatus: getWAStatus, getQR, sendToJid } = require('./src/whatsapp');
 const { queryLLM, queryLLMLoop, parseResponse } = require('./src/llm');
 const { loadConfig, updateConfig }             = require('./src/config');
+const { updateAgentConfig }                    = require('./src/tools');
 const queue     = require('./src/command-queue');
 const session   = require('./src/session');
 const scheduler = require('./src/scheduler');
@@ -188,6 +190,43 @@ app.post('/whatsapp/send', async (req, res) => {
   if (!jid || !message) return res.status(400).json({ error: 'jid and message required' });
   await sendToJid(jid, message);
   res.json({ ok: true });
+});
+
+// ─── Env API (used by web portal) ────────────────────────────────────────────
+
+const ENV_KEYS = ['TELEGRAM_BOT_TOKEN','OPENAI_API_KEY','ANTHROPIC_API_KEY','GEMINI_API_KEY',
+                  'KIMI_API_KEY','MISTRAL_API_KEY','XAI_API_KEY','DEEPSEEK_API_KEY'];
+const ENV_PATH = process.env.NODE_ENV === 'production'
+  ? '/app/config/.env'
+  : path.join(__dirname, 'config', '.env');
+
+app.get('/env', (req, res) => {
+  const result = {};
+  try {
+    const content = fs.readFileSync(ENV_PATH, 'utf8');
+    ENV_KEYS.forEach(k => {
+      const m = content.match(new RegExp(`^${k}=(.+)$`, 'm'));
+      result[k] = !!(m && m[1].trim());
+    });
+  } catch { ENV_KEYS.forEach(k => result[k] = false); }
+  res.json(result);
+});
+
+app.post('/env', (req, res) => {
+  const { key, value } = req.body;
+  if (!key || value === undefined) return res.status(400).json({ error: 'key and value required' });
+  const msg = updateAgentConfig('env', key, value);
+  res.json({ ok: true, message: msg });
+});
+
+// ─── Ollama models proxy ──────────────────────────────────────────────────────
+
+app.get('/ollama/models', async (req, res) => {
+  const url = process.env.OLLAMA_URL || 'http://host.docker.internal:11434';
+  try {
+    const r = await axios.get(`${url}/api/tags`, { timeout: 3000 });
+    res.json((r.data.models || []).map(m => m.name));
+  } catch { res.json([]); }
 });
 
 // ─── Config API (used by web portal) ─────────────────────────────────────────

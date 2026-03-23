@@ -305,6 +305,7 @@ configured and suggest they add one from the CLI.
     anthropic: 'claude-sonnet-4-6',
     mistral:   'mistral-large-2411',
     grok:      'grok-4.1',
+    deepseek:  'deepseek-chat',
   },
 };
 
