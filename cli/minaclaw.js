@@ -25,6 +25,7 @@ if (process.argv[2] === 'watch') {
 const CONFIG_DIR      = path.join(PROJECT_ROOT, 'config');
 const COMPOSE_FILE         = path.join(PROJECT_ROOT, 'docker-compose.yml');
 const AGENT_COMPOSE_FILE   = path.join(PROJECT_ROOT, 'config', 'agent-compose.yml');
+const OVERRIDE_COMPOSE_FILE = path.join(PROJECT_ROOT, 'docker-compose.override.yml');
 const ENV_PATH        = path.join(CONFIG_DIR, '.env');
 const CONFIG_JSON_PATH = path.join(CONFIG_DIR, 'config.json');
 
@@ -975,9 +976,22 @@ function saveAgentCompose(doc) {
   fs.writeFileSync(AGENT_COMPOSE_FILE, yaml.dump(doc));
 }
 
+function loadOverrideCompose() {
+  if (!fs.existsSync(OVERRIDE_COMPOSE_FILE)) return { services: { minaclaw: { volumes: [] } } };
+  const doc = yaml.load(fs.readFileSync(OVERRIDE_COMPOSE_FILE, 'utf8')) || {};
+  doc.services                      = doc.services || {};
+  doc.services.minaclaw             = doc.services.minaclaw || {};
+  doc.services.minaclaw.volumes     = doc.services.minaclaw.volumes || [];
+  return doc;
+}
+
+function saveOverrideCompose(doc) {
+  fs.writeFileSync(OVERRIDE_COMPOSE_FILE, yaml.dump(doc));
+}
+
 async function manageSafeFolders() {
   while (true) {
-    const doc        = loadAgentCompose();
+    const doc        = loadOverrideCompose();
     const volumes    = doc.services.minaclaw.volumes;
     const safeMounts = volumes.filter(v => typeof v === 'string' && v.includes('/mnt/safe'));
 
@@ -1012,7 +1026,7 @@ async function manageSafeFolders() {
       }));
 
       doc.services.minaclaw.volumes = [...volumes, `${hostPath}:/mnt/safe/${alias}`];
-      saveAgentCompose(doc);
+      saveOverrideCompose(doc);
       log.success(`Added "${hostPath}" as /mnt/safe/${alias}.`);
       await offerDaemonRestart();
       continue;
@@ -1040,7 +1054,7 @@ async function manageSafeFolders() {
       }));
       if (ok) {
         doc.services.minaclaw.volumes = volumes.filter(v => v !== selected);
-        saveAgentCompose(doc);
+        saveOverrideCompose(doc);
         log.success('Removed.');
         await offerDaemonRestart();
       } else {
@@ -1055,7 +1069,7 @@ async function manageSafeFolders() {
       }));
       const newMount = `${hostPath}:/mnt/safe/${newAlias}`;
       doc.services.minaclaw.volumes = volumes.map(v => v === selected ? newMount : v);
-      saveAgentCompose(doc);
+      saveOverrideCompose(doc);
       log.success(`Renamed to "${newAlias}".`);
       await offerDaemonRestart();
     }
