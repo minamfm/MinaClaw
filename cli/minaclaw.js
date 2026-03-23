@@ -23,7 +23,8 @@ if (process.argv[2] === 'watch') {
 }
 
 const CONFIG_DIR      = path.join(PROJECT_ROOT, 'config');
-const COMPOSE_FILE    = path.join(PROJECT_ROOT, 'docker-compose.yml');
+const COMPOSE_FILE         = path.join(PROJECT_ROOT, 'docker-compose.yml');
+const AGENT_COMPOSE_FILE   = path.join(PROJECT_ROOT, 'config', 'agent-compose.yml');
 const ENV_PATH        = path.join(CONFIG_DIR, '.env');
 const CONFIG_JSON_PATH = path.join(CONFIG_DIR, 'config.json');
 
@@ -960,15 +961,24 @@ async function browseForDirectory(startPath) {
   }
 }
 
-async function manageSafeFolders() {
-  if (!fs.existsSync(COMPOSE_FILE)) {
-    log.error('docker-compose.yml not found.');
-    return;
-  }
+function loadAgentCompose() {
+  if (!fs.existsSync(AGENT_COMPOSE_FILE)) return { services: { minaclaw: { volumes: [] } } };
+  const doc = yaml.load(fs.readFileSync(AGENT_COMPOSE_FILE, 'utf8')) || {};
+  doc.services                      = doc.services || {};
+  doc.services.minaclaw             = doc.services.minaclaw || {};
+  doc.services.minaclaw.volumes     = doc.services.minaclaw.volumes || [];
+  return doc;
+}
 
+function saveAgentCompose(doc) {
+  fs.mkdirSync(path.dirname(AGENT_COMPOSE_FILE), { recursive: true });
+  fs.writeFileSync(AGENT_COMPOSE_FILE, yaml.dump(doc));
+}
+
+async function manageSafeFolders() {
   while (true) {
-    const doc = yaml.load(fs.readFileSync(COMPOSE_FILE, 'utf8'));
-    const volumes = doc.services.minaclaw.volumes || [];
+    const doc        = loadAgentCompose();
+    const volumes    = doc.services.minaclaw.volumes;
     const safeMounts = volumes.filter(v => typeof v === 'string' && v.includes('/mnt/safe'));
 
     const options = safeMounts.map(mount => {
@@ -991,7 +1001,7 @@ async function manageSafeFolders() {
       const hostPath = await browseForDirectory();
       if (!hostPath) { log.info('Cancelled.'); continue; }
 
-      if (volumes.some(v => typeof v === 'string' && v.startsWith(hostPath + ':'))) {
+      if (safeMounts.some(v => v.startsWith(hostPath + ':'))) {
         log.warn(`"${hostPath}" is already a safe folder.`);
         continue;
       }
@@ -1002,7 +1012,7 @@ async function manageSafeFolders() {
       }));
 
       doc.services.minaclaw.volumes = [...volumes, `${hostPath}:/mnt/safe/${alias}`];
-      fs.writeFileSync(COMPOSE_FILE, yaml.dump(doc));
+      saveAgentCompose(doc);
       log.success(`Added "${hostPath}" as /mnt/safe/${alias}. Restart daemon to apply.`);
       continue;
     }
@@ -1029,7 +1039,7 @@ async function manageSafeFolders() {
       }));
       if (ok) {
         doc.services.minaclaw.volumes = volumes.filter(v => v !== selected);
-        fs.writeFileSync(COMPOSE_FILE, yaml.dump(doc));
+        saveAgentCompose(doc);
         log.success('Removed. Restart daemon to apply.');
       } else {
         log.info('Cancelled.');
@@ -1043,7 +1053,7 @@ async function manageSafeFolders() {
       }));
       const newMount = `${hostPath}:/mnt/safe/${newAlias}`;
       doc.services.minaclaw.volumes = volumes.map(v => v === selected ? newMount : v);
-      fs.writeFileSync(COMPOSE_FILE, yaml.dump(doc));
+      saveAgentCompose(doc);
       log.success(`Renamed to "${newAlias}". Restart daemon to apply.`);
     }
   }

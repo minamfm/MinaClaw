@@ -13,7 +13,6 @@ services:
     volumes:
       - ./config:/app/config
       - ./skills:/app/skills
-      - /home/mina-morgan/home_dashboard/home-dashboard:/mnt/safe/home-dashboard
     env_file:
       - ./config/.env
     environment:
