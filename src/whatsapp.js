@@ -120,10 +120,20 @@ async function startWhatsAppBot() {
 
   sock.ev.on('creds.update', saveCreds);
 
+  const seenMsgIds = new Set();
+
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
     for (const msg of messages) {
       if (msg.key.fromMe) continue;
+      // Deduplicate — Baileys can deliver the same message under both @lid and
+      // @s.whatsapp.net JIDs; after normalizeLid both would pass the whitelist.
+      const msgId = msg.key.id;
+      if (msgId) {
+        if (seenMsgIds.has(msgId)) continue;
+        seenMsgIds.add(msgId);
+        if (seenMsgIds.size > 500) seenMsgIds.delete(seenMsgIds.values().next().value);
+      }
       await handleMessage(msg).catch(err =>
         console.error('[WhatsApp] handleMessage error:', err.message)
       );
