@@ -1,6 +1,8 @@
 require('dotenv').config({ path: './config/.env' });
 const express    = require('express');
 const bodyParser = require('body-parser');
+const fs         = require('fs');
+const path       = require('path');
 const { startTelegramBot }                     = require('./src/telegram');
 const { startWhatsAppBot, getStatus: getWAStatus, getQR, sendToJid } = require('./src/whatsapp');
 const { queryLLM, queryLLMLoop, parseResponse } = require('./src/llm');
@@ -13,6 +15,7 @@ console.log('Starting MinaClaw daemon…');
 
 const app = express();
 app.use(bodyParser.json());
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Chat endpoint — maintains per-session conversation history.
 // sessionId defaults to 'cli' for the host CLI; Telegram passes chatId.
@@ -187,8 +190,41 @@ app.post('/whatsapp/send', async (req, res) => {
   res.json({ ok: true });
 });
 
+// ─── Config API (used by web portal) ─────────────────────────────────────────
+
+app.get('/config', (req, res) => res.json(loadConfig()));
+
+app.post('/config', (req, res) => {
+  const updates = req.body;
+  if (!updates || typeof updates !== 'object')
+    return res.status(400).json({ error: 'JSON body required' });
+  const updated = updateConfig(updates);
+  res.json(updated);
+});
+
+// ─── Logs API ─────────────────────────────────────────────────────────────────
+
+app.get('/logs', (req, res) => {
+  const logPath = process.env.NODE_ENV === 'production'
+    ? '/app/config/daemon.log'
+    : path.join(__dirname, 'config', 'daemon.log');
+  try {
+    const lines = fs.readFileSync(logPath, 'utf8').split('\n');
+    res.type('text/plain').send(lines.slice(-150).join('\n'));
+  } catch {
+    res.type('text/plain').send('Log file not found.');
+  }
+});
+
+// ─── Servers ──────────────────────────────────────────────────────────────────
+
 const server = app.listen(6192, '0.0.0.0', () => {
   console.log('Internal CLI API listening on port 6192');
+});
+
+const PORTAL_PORT = parseInt(process.env.PORTAL_PORT || '3004');
+app.listen(PORTAL_PORT, '0.0.0.0', () => {
+  console.log(`Web portal listening on port ${PORTAL_PORT}`);
 });
 
 const bot = startTelegramBot();

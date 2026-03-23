@@ -35,5 +35,7 @@ RUN mkdir -p /app/config /app/config/whatsapp-auth /app/skills /mnt/safe
 
 # Expose internal API port for the host CLI
 EXPOSE 6192
+# Expose web portal
+EXPOSE 3004
 
 CMD ["node", "index.js"]

@@ -695,6 +695,22 @@ async function queryLLMLoop(messages, { onProgress, onChunk, onThinking, signal,
     const parsed = parseResponse(result.text);
 
     const TOOL_TYPES = ['internal_exec', 'fetch_url', 'search_web', 'update_config'];
+
+    // Planning-statement nudge — fires when the model narrates intent (e.g. "I'll schedule
+    // that for you") instead of calling a tool. Inject a system correction and retry once.
+    if (!TOOL_TYPES.includes(parsed.type) && i < 2 && !result.error) {
+      const planRegex = /\b(I['']?ll|I will|I['']?m going to|let me|going to)\b[\s\S]{0,250}\b(schedule|remind|set (a |up )?timer|create (a )?reminder|turn (on|off)|run|execute|send|fetch|search|check|call)\b/i;
+      if (planRegex.test(result.text)) {
+        console.log(`[nudge] step=${i} — planning statement detected, nudging for tool call`);
+        msgs = [...msgs,
+          { role: 'assistant', content: result.text },
+          { role: 'user', content: '[System: You described what you would do but did not call any tool. Call the appropriate tool now — no explanation, just the tool call.]' },
+        ];
+        newMessages.push({ role: 'assistant', content: result.text });
+        continue;
+      }
+    }
+
     if (!TOOL_TYPES.includes(parsed.type)) {
       newMessages.push({ role: 'assistant', content: result.text });
       if (sessionId) session.clearThinking(sessionId);
