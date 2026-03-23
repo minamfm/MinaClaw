@@ -1,5 +1,6 @@
 include:
   - path: ./config/agent-compose.yml
+    required: false
 
 services:
   minaclaw:
