@@ -778,4 +778,11 @@ async function queryLLMLoop(messages, { onProgress, onChunk, onThinking, signal,
   return { text: fallback, usage: totalUsage, model: lastModel, parsed: { type: 'text', response: fallback }, newMessages, hitLimit: true };
 }
 
-module.exports = { queryLLM, queryLLMLoop, parseResponse };
+async function transcribeVoice(buffer) {
+  const { toFile } = require('openai');
+  const file = await toFile(buffer, 'voice.ogg', { type: 'audio/ogg' });
+  const result = await openai.audio.transcriptions.create({ file, model: 'whisper-1' });
+  return result.text.trim();
+}
+
+module.exports = { queryLLM, queryLLMLoop, parseResponse, transcribeVoice };

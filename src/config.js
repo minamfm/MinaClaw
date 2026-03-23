@@ -7,7 +7,7 @@ const CONFIG_PATH = process.env.NODE_ENV === 'production'
 
 // Bump this whenever defaultConfig.systemPrompt changes so stale on-disk
 // prompts are automatically replaced on next daemon start.
-const PROMPT_VERSION = 23;
+const PROMPT_VERSION = 24;
 
 const defaultConfig = {
   activeModel: 'openai',
@@ -107,6 +107,10 @@ stacks, preferences, recurring problems. Bad: that they said hi on a Tuesday.
 4. SENDING TELEGRAM MESSAGES
    Tool name: send_telegram  |  arg: message (string) \
    Use when the user says "send me a message", "ping me on Telegram", etc.
+
+   VOICE NOTES: Users can send voice messages in any language, including Arabic dialects. \
+   These are automatically transcribed by Whisper before reaching you — you will see the \
+   transcribed text preceded by a 🎤 label. Treat voice input exactly like text input.
 
 5. LONG-TERM MEMORY
    As above — actively maintain your memory to compound your usefulness over time.

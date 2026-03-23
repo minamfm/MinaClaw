@@ -1,5 +1,6 @@
 const { Telegraf } = require('telegraf');
-const { queryLLMLoop, parseResponse } = require('./llm');
+const axios = require('axios');
+const { queryLLMLoop, parseResponse, transcribeVoice } = require('./llm');
 const { updateConfig } = require('./config');
 const { handleScheduling } = require('./scheduler');
 const { connectToChromeAndLearn, learnFromDirectory } = require('./browser');
@@ -122,10 +123,8 @@ function startTelegramBot() {
   // Track in-flight requests so a new message can abort the previous one
   const activeRequests = new Map();
 
-  bot.on('text', async (ctx) => {
-    const text      = ctx.message.text;
-    const sessionId = ctx.chat.id.toString();
-
+  // Shared pipeline — handles scheduling, LLM call, streaming, and reply for both text and voice
+  async function processMessage(ctx, text, sessionId) {
     // Abort any in-flight request for this session
     const prev = activeRequests.get(sessionId);
     if (prev) {
@@ -137,9 +136,6 @@ function startTelegramBot() {
     activeRequests.set(sessionId, abortController);
     const { signal } = abortController;
 
-    // Persist the user's chat ID so the agent can message them proactively
-    updateConfig({ telegramChatId: ctx.chat.id });
-
     if (text.toLowerCase().includes('remind me')) {
       const scheduled = await handleScheduling(text, ctx);
       if (scheduled) return;
@@ -149,6 +145,7 @@ function startTelegramBot() {
     const typingInterval = setInterval(() => ctx.sendChatAction('typing'), 4000);
 
     // Progress message — created on first tool call, edited on each subsequent one
+    // Currently disabled — swap null → onProgress in queryLLMLoop call to re-enable
     let progressMsgId = null;
     let progressLines = [];
     let progressSent  = false;
@@ -168,9 +165,9 @@ function startTelegramBot() {
     };
 
     // Thinking message — created on first thinking chunk, collapsed to 💭 when done
-    let thinkingMsgId     = null;
-    let thinkingCreating  = false;
-    let thinkingLastEdit  = 0;
+    let thinkingMsgId    = null;
+    let thinkingCreating = false;
+    let thinkingLastEdit = 0;
 
     const onThinking = (accumulated) => {
       // null = reset signal between tool steps: collapse current message and clear for next step
@@ -200,10 +197,10 @@ function startTelegramBot() {
     };
 
     // Streaming message — created on first text chunk, edited every 2 sentence endings
-    let streamMsgId   = null;
+    let streamMsgId    = null;
     let streamCreating = false;
-    let streamText    = '';
-    let streamPeriods = 0;
+    let streamText     = '';
+    let streamPeriods  = 0;
     let streamLastEdit = 0;
 
     const onChunk = (accumulated) => {
@@ -233,7 +230,7 @@ function startTelegramBot() {
       }
     };
 
-    // After 5s with no tool calls and no streaming, send a generic reassurance
+    // After 20s with no tool calls and no streaming, send a generic reassurance
     workingTimer = setTimeout(async () => {
       if (!progressSent && !streamMsgId) {
         await ctx.reply('⏳ Working on it…').catch(() => {});
@@ -241,10 +238,10 @@ function startTelegramBot() {
     }, 20_000);
 
     // Check for resumption context: tool call limit hit OR crash mid-task
-    const history   = session.get(sessionId);
-    const lastAsst  = [...history].reverse().find(m => m.role === 'assistant');
-    const resuming  = lastAsst?.content === LIMIT_FALLBACK;
-    const thinking  = session.getThinking(sessionId);
+    const history  = session.get(sessionId);
+    const lastAsst = [...history].reverse().find(m => m.role === 'assistant');
+    const resuming = lastAsst?.content === LIMIT_FALLBACK;
+    const thinking = session.getThinking(sessionId);
 
     session.append(sessionId, 'user', text);
     let messages = session.get(sessionId);
@@ -259,7 +256,6 @@ function startTelegramBot() {
     }
 
     try {
-      // Tool-call progress messages disabled — swap null back to onProgress to re-enable
       const { text: llmText, usage, parsed, newMessages, hitLimit, aborted } = await queryLLMLoop(messages, { onProgress: null, onChunk, onThinking, signal, sessionId });
       clearInterval(typingInterval);
       clearTimeout(workingTimer);
@@ -285,7 +281,7 @@ function startTelegramBot() {
 
       // Update the progress message to final state
       if (progressMsgId) {
-        const status   = hitLimit ? '⚠️ Hit tool call limit — say "continue" to resume' : '✅ Done';
+        const status    = hitLimit ? '⚠️ Hit tool call limit — say "continue" to resume' : '✅ Done';
         const finalBody = `${status}\n\n` + progressLines.join('\n');
         await ctx.telegram.editMessageText(ctx.chat.id, progressMsgId, null, finalBody).catch(() => {});
       }
@@ -346,10 +342,38 @@ function startTelegramBot() {
       console.error('Bot handler error:', err);
       ctx.reply('Sorry, something went wrong on my end. Please try again.').catch(() => {});
     }
+  }
+
+  bot.on('text', async (ctx) => {
+    const text      = ctx.message.text;
+    const sessionId = ctx.chat.id.toString();
+    updateConfig({ telegramChatId: ctx.chat.id });
+    await processMessage(ctx, text, sessionId);
   });
 
   bot.on('voice', async (ctx) => {
-    ctx.reply('Voice notes received. Transcription module pending implementation.');
+    const sessionId = ctx.chat.id.toString();
+    updateConfig({ telegramChatId: ctx.chat.id });
+
+    let transcribedText;
+    try {
+      await ctx.sendChatAction('typing');
+      const fileLink = await ctx.telegram.getFileLink(ctx.message.voice.file_id);
+      const { data } = await axios.get(fileLink.href, { responseType: 'arraybuffer' });
+      transcribedText = await transcribeVoice(Buffer.from(data));
+    } catch (err) {
+      console.error('Voice transcription error:', err);
+      return ctx.reply('⚠️ Failed to transcribe voice note. Please try again.').catch(() => {});
+    }
+
+    if (!transcribedText) {
+      return ctx.reply('⚠️ Could not understand the voice note. Please try again.');
+    }
+
+    // Echo the transcription so the user can see what was heard
+    await ctx.reply(`🎤 ${transcribedText}`).catch(() => {});
+
+    await processMessage(ctx, transcribedText, sessionId);
   });
 
   let launchDelay = 5000;
