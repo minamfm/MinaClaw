@@ -19,6 +19,19 @@ const session = require('./session');
 const AUTH_DIR = '/app/config/whatsapp-auth';
 const SILENT   = pino({ level: 'silent' });
 
+// Resolve a @lid JID to its @s.whatsapp.net equivalent using Baileys' on-disk mapping.
+// Returns the original jid unchanged if no mapping exists.
+function normalizeLid(jid) {
+  if (!jid || !jid.endsWith('@lid')) return jid;
+  const lid = jid.slice(0, -4); // strip '@lid'
+  try {
+    const phone = JSON.parse(fs.readFileSync(`${AUTH_DIR}/lid-mapping-${lid}_reverse.json`, 'utf8'));
+    return phone + '@s.whatsapp.net';
+  } catch {
+    return jid;
+  }
+}
+
 // ─── Module state ─────────────────────────────────────────────────────────────
 
 let sock            = null;
@@ -121,7 +134,7 @@ async function startWhatsAppBot() {
 // ─── Message routing ──────────────────────────────────────────────────────────
 
 async function handleMessage(msg) {
-  const jid = msg.key.remoteJid;
+  const jid = normalizeLid(msg.key.remoteJid);
   if (!jid) return;
 
   // Skip groups and broadcast

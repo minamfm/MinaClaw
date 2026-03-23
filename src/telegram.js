@@ -210,11 +210,11 @@ function startTelegramBot() {
     };
 
     // Streaming message — created on first text chunk, edited every 2 sentence endings
-    let streamMsgId    = null;
-    let streamCreating = false;
-    let streamText     = '';
-    let streamPeriods  = 0;
-    let streamLastEdit = 0;
+    let streamMsgId      = null;
+    let streamMsgPromise = null; // awaitable so final reply waits for creation to settle
+    let streamText       = '';
+    let streamPeriods    = 0;
+    let streamLastEdit   = 0;
 
     const onChunk = (accumulated) => {
       // Detect a new LLM step (accumulation reset to short text)
@@ -227,12 +227,10 @@ function startTelegramBot() {
 
       const now = Date.now();
 
-      if (!streamMsgId && !streamCreating && accumulated.length >= 30) {
-        streamCreating = true;
-        ctx.reply(accumulated).then(msg => {
+      if (!streamMsgId && !streamMsgPromise && accumulated.length >= 30) {
+        streamMsgPromise = ctx.reply(accumulated).then(msg => {
           if (msg) { streamMsgId = msg.message_id; streamLastEdit = Date.now(); streamPeriods = 0; }
-          streamCreating = false;
-        }).catch(() => { streamCreating = false; });
+        }).catch(() => {});
         return;
       }
 
@@ -332,6 +330,10 @@ function startTelegramBot() {
           }
         );
       }
+
+      // Wait for any in-flight streaming message creation to settle before deciding
+      // whether to edit it or send a new reply — prevents duplicate messages.
+      if (streamMsgPromise) await streamMsgPromise;
 
       const finalText = (parsed.response || llmText || '').trim();
       if (!finalText) {
