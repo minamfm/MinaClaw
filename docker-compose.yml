@@ -1,3 +1,6 @@
+include:
+  - path: ./config/agent-compose.yml
+
 services:
   minaclaw:
     build: .
@@ -16,4 +19,4 @@ services:
       - NODE_ENV=production
     extra_hosts:
       - host.docker.internal:host-gateway
-    command: sh -c "printf '\\n=== daemon started ' >> /app/config/daemon.log && date >> /app/config/daemon.log && node index.js 2>&1 | tee -a /app/config/daemon.log"
+    command: sh -c "[ -f /app/config/agent-setup.sh ] && sh /app/config/agent-setup.sh; printf '\\n=== daemon started ' >> /app/config/daemon.log && date >> /app/config/daemon.log && node index.js 2>&1 | tee -a /app/config/daemon.log"

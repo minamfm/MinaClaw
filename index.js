@@ -175,11 +175,15 @@ app.get('/whatsapp/numbers', (req, res) => {
 // ─── Scheduler API ────────────────────────────────────────────────────────────
 
 app.post('/schedule/add', (req, res) => {
-  const { delaySeconds, command, label } = req.body;
-  if (!command || delaySeconds == null)
-    return res.status(400).json({ error: 'command and delaySeconds required' });
+  const { delaySeconds, cronExpr, command, label } = req.body;
+  if (!command) return res.status(400).json({ error: 'command required' });
+  if (cronExpr) {
+    const id = scheduler.addCronJob({ cronExpr, command, label });
+    return res.json({ id, type: 'recurring' });
+  }
+  if (delaySeconds == null) return res.status(400).json({ error: 'delaySeconds or cronExpr required' });
   const id = scheduler.addOneTimeJob({ delayMs: delaySeconds * 1000, command, label });
-  res.json({ id });
+  res.json({ id, type: 'once' });
 });
 
 app.get('/schedule/list', (req, res) => {

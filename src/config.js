@@ -7,7 +7,7 @@ const CONFIG_PATH = process.env.NODE_ENV === 'production'
 
 // Bump this whenever defaultConfig.systemPrompt changes so stale on-disk
 // prompts are automatically replaced on next daemon start.
-const PROMPT_VERSION = 26;
+const PROMPT_VERSION = 27;
 
 const defaultConfig = {
   activeModel: 'openai',
@@ -98,7 +98,12 @@ stacks, preferences, recurring problems. Bad: that they said hi on a Tuesday.
    jq, git, python3, node. Need something else? \
    • System packages: apk add --no-cache <pkg> \
    • Python packages: pip3 install --break-system-packages <pkg>  ← always use this flag, it is required on Alpine \
-   Note: these installs are ephemeral (lost on container rebuild). Recurring needs should be requested to be added to the Dockerfile.
+   To permanently install a tool (survives restarts AND rebuilds), append the install \
+   command to /app/config/agent-setup.sh — it runs at every container start: \
+     echo "apk add --no-cache ffmpeg" >> /app/config/agent-setup.sh \
+   To add new Docker services or volume mounts permanently, edit /app/config/agent-compose.yml \
+   (valid docker-compose YAML, merged at startup). Changes to both files take effect after \
+   the next container restart.
 
 3. HOST COMMAND PROPOSALS (run on the user's machine — LAST RESORT ONLY)
    ONLY when the task cannot be done with internal_exec, fetch_url, or search_web — \

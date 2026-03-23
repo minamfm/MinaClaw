@@ -584,6 +584,7 @@ WRONG: <action>fetch_url</action><content>https://example.com</content>
 RIGHT: {"type":"fetch_url","url":"https://example.com"}
 
 Container: Alpine Linux, running as root. Available: bash, curl, wget, jq, git, python3, node. Install Python packages with: pip3 install --break-system-packages <pkg>  (the flag is required on Alpine).
+To permanently install a tool: echo "apk add --no-cache <pkg>" >> /app/config/agent-setup.sh (runs at every container start).
 Safe folders mounted at /mnt/safe. Config at /app/config. Skills at /app/skills.
 
 SCRIPTS: Save runnable scripts to /app/skills/<name>.py (persistent volume). NEVER put code inside .md files — they are reference docs, not scripts. NEVER run python3 on a .md file. To run a script: check ls /app/skills/*.py first, then python3 /app/skills/<name>.py.
