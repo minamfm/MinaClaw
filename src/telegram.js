@@ -52,6 +52,18 @@ function startTelegramBot() {
     return ctx.reply(result);
   });
 
+  bot.command('kill', async (ctx) => {
+    const sessionId = ctx.chat.id.toString();
+    const prev = activeRequests.get(sessionId);
+    if (prev) {
+      prev.abort();
+      activeRequests.delete(sessionId);
+      console.log(`[kill] session=${sessionId} — agent killed by user`);
+      return ctx.reply('🛑 Agent stopped.');
+    }
+    return ctx.reply('No active task running.');
+  });
+
   bot.command('sh', async (ctx) => {
     const command = ctx.message.text.replace('/sh', '').trim();
     if (!command) return ctx.reply('Please provide a command. e.g., /sh ls -la');
@@ -345,7 +357,8 @@ function startTelegramBot() {
   }
 
   bot.on('text', async (ctx) => {
-    const text      = ctx.message.text;
+    const text = ctx.message.text;
+    if (text.startsWith('/')) return; // handled by dedicated command handlers
     const sessionId = ctx.chat.id.toString();
     updateConfig({ telegramChatId: ctx.chat.id });
     await processMessage(ctx, text, sessionId);

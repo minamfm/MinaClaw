@@ -171,6 +171,19 @@ async function handleMessage(msg) {
 
   // ─── Built-in commands ─────────────────────────────────────────────────────
 
+  if (text.trim() === '/kill') {
+    const prev = activeRequests.get(jid);
+    if (prev) {
+      prev.abort();
+      activeRequests.delete(jid);
+      console.log(`[kill] jid=${jid} — agent killed by user`);
+      await sendToJid(jid, '🛑 Agent stopped.');
+    } else {
+      await sendToJid(jid, 'No active task running.');
+    }
+    return;
+  }
+
   if (text.startsWith('/bind ')) {
     const num = text.slice(6).trim();
     if (num) {
