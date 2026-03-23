@@ -16,18 +16,35 @@ function startTelegramBot() {
 
   const bot = new Telegraf(token, { handlerTimeout: 300_000 });
 
+  const { loadConfig } = require('./config');
+
+  function modelStatus() {
+    const cfg = loadConfig();
+    const active = cfg.activeModel;
+    const models = cfg.models || {};
+    const providers = ['openai', 'anthropic', 'gemini', 'mistral', 'grok', 'kimi', 'ollama'];
+    const lines = providers.map(p => {
+      const mark = p === active ? '▶' : ' ';
+      const name = models[p] || '(default)';
+      return `${mark} ${p} — ${name}`;
+    });
+    return `Active model:\n\`\`\`\n${lines.join('\n')}\n\`\`\`\nSwitch with /model <provider>`;
+  }
+
+  bot.command('models', (ctx) => ctx.reply(modelStatus(), { parse_mode: 'Markdown' }));
+
   bot.command('model', (ctx) => {
-    const args = ctx.message.text.split(' ');
+    const args = ctx.message.text.split(' ').filter(Boolean);
     if (args.length > 1) {
-      const newModel = args[1];
+      const newModel = args[1].toLowerCase();
       const valid = ['openai', 'anthropic', 'gemini', 'mistral', 'grok', 'kimi', 'ollama'];
       if (valid.includes(newModel)) {
         updateConfig({ activeModel: newModel });
-        return ctx.reply(`Switched active provider to: ${newModel}`);
+        return ctx.reply(modelStatus(), { parse_mode: 'Markdown' });
       }
       return ctx.reply(`Invalid provider. Choose from: ${valid.join(', ')}`);
     }
-    return ctx.reply('Please specify a provider. e.g., /model gemini');
+    return ctx.reply(modelStatus(), { parse_mode: 'Markdown' });
   });
 
   bot.command('learn', async (ctx) => {
