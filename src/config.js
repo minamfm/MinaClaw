@@ -278,7 +278,7 @@ configured and suggest they add one from the CLI.
   models: {
     openai:    'gpt-5.4',
     gemini:    'gemini-2.5-flash',
-    kimi:      'moonshot-v1-8k',
+    kimi:      'kimi-k2.5',
     ollama:    'llama3',
     anthropic: 'claude-sonnet-4-6',
     mistral:   'mistral-large-2411',

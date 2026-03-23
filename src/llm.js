@@ -13,7 +13,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 // Kimi (Moonshot) — OpenAI-compatible
 const kimi = new OpenAI({
   apiKey: process.env.KIMI_API_KEY,
-  baseURL: 'https://api.moonshot.cn/v1',
+  baseURL: 'https://api.moonshot.ai/v1',
 });
 
 // Mistral — OpenAI-compatible
@@ -280,8 +280,24 @@ async function queryOpenAICompat(client, messages, model, onChunk) {
   return { raw: text, usage };
 }
 
-async function queryKimi(messages, model, onChunk) {
-  return queryOpenAICompat(kimi, messages, model, onChunk);
+async function queryKimi(messages, model, onChunk, onThinking) {
+  const stream = await kimi.chat.completions.create({ model, messages, stream: true });
+  let text = '', thinking = '';
+  let usage = { input: 0, output: 0 };
+  for await (const chunk of stream) {
+    if (chunk.usage) usage = { input: chunk.usage.prompt_tokens, output: chunk.usage.completion_tokens };
+    const delta = chunk.choices[0]?.delta;
+    if (!delta) continue;
+    if (delta.reasoning_content) {
+      thinking += delta.reasoning_content;
+      if (onThinking) onThinking(thinking);
+    }
+    if (delta.content) {
+      text += delta.content;
+      if (onChunk && text.length > 40 && !text.trimStart().startsWith('{')) onChunk(text);
+    }
+  }
+  return { raw: text, usage };
 }
 async function queryMistral(messages, model, onChunk) {
   return queryOpenAICompat(mistral, messages, model, onChunk);
@@ -542,7 +558,7 @@ async function queryLLM(messages, { onChunk, onThinking, signal } = {}) {
   try {
     switch (activeModel) {
       case 'openai':    result = await queryOpenAI(fullMessages, modelName, onChunk, onThinking, signal); break;
-      case 'kimi':      result = await queryKimi(fullMessages, modelName, onChunk);                 break;
+      case 'kimi':      result = await queryKimi(fullMessages, modelName, onChunk, onThinking);    break;
       case 'gemini':    result = await queryGemini(fullMessages, modelName, onChunk);               break;
       case 'ollama':    result = await queryOllama(fullMessages, modelName, onChunk, onThinking, signal); break;
       case 'anthropic': result = await queryAnthropic(fullMessages, modelName, sysPrompt, onChunk); break;
