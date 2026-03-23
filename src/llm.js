@@ -695,8 +695,8 @@ async function compactHistory(msgs) {
  * newMessages: simple text format only — safe to persist to session across provider changes
  */
 async function queryLLMLoop(messages, { onProgress, onChunk, onThinking, signal, sessionId } = {}) {
-  const MAX_STEPS  = 25;
-  const WARN_STEP  = 22; // inject a wrap-up nudge before hard-stopping
+  const MAX_STEPS  = 10;
+  const WARN_STEP  = 8; // inject a wrap-up nudge before hard-stopping
   let msgs = [...messages];
 
   // Auto-compact when estimated token count approaches the context window limit
@@ -797,7 +797,7 @@ async function queryLLMLoop(messages, { onProgress, onChunk, onThinking, signal,
     recentToolKeys.push(semanticKey);
     if (recentToolKeys.length > 8) recentToolKeys.shift();
     const repeatCount = recentToolKeys.filter(k => k === semanticKey).length;
-    if (repeatCount >= 4) {
+    if (repeatCount >= 10) {
       const loopText = `I kept hitting the same failure (${semanticKey}) across ${repeatCount} different attempts and stopped myself. This is likely a network, permissions, or environment issue rather than a script bug. Please check connectivity or provide more context.`;
       console.warn(`[loop-detect] semantic loop exit: ${semanticKey} (${repeatCount}x)`);
       newMessages.push({ role: 'assistant', content: loopText });
