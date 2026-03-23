@@ -308,8 +308,9 @@ async function processMessage(jid, text) {
   activeRequests.set(jid, abortController);
   const { signal } = abortController;
 
-  // Typing presence
+  // Typing presence — refresh every 10s so it persists for long agent runs
   sock.sendPresenceUpdate('composing', jid).catch(() => {});
+  const typingInterval = setInterval(() => sock.sendPresenceUpdate('composing', jid).catch(() => {}), 10000);
 
   // Record the active WhatsApp JID so notify.py can route back here
   // even if the agent forgets to pass --channel.
@@ -342,6 +343,7 @@ async function processMessage(jid, text) {
 
   try {
     const { text: llmText, usage, parsed, newMessages, aborted } = await queryLLMLoop(messages, { signal, sessionId });
+    clearInterval(typingInterval);
     activeRequests.delete(jid);
     sock.sendPresenceUpdate('paused', jid).catch(() => {});
 
@@ -369,6 +371,7 @@ async function processMessage(jid, text) {
     if (finalText) await sendToJid(jid, finalText);
 
   } catch (err) {
+    clearInterval(typingInterval);
     activeRequests.delete(jid);
     sock.sendPresenceUpdate('paused', jid).catch(() => {});
     if (signal.aborted) return;
