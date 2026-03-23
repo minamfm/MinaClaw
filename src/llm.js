@@ -558,7 +558,7 @@ async function queryLLM(messages, { onChunk, onThinking, signal } = {}) {
   try {
     switch (activeModel) {
       case 'openai':    result = await queryOpenAI(fullMessages, modelName, onChunk, onThinking, signal); break;
-      case 'kimi':      result = await queryKimi(fullMessages, modelName, onChunk, onThinking);    break;
+      case 'kimi':      result = await queryKimi(fullMessages, modelName, onChunk);               break;
       case 'gemini':    result = await queryGemini(fullMessages, modelName, onChunk);               break;
       case 'ollama':    result = await queryOllama(fullMessages, modelName, onChunk, onThinking, signal); break;
       case 'anthropic': result = await queryAnthropic(fullMessages, modelName, sysPrompt, onChunk); break;
