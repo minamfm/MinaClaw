@@ -584,9 +584,9 @@ async function queryLLM(messages, { onChunk, onThinking, signal } = {}) {
 
 // ─── Auto-compact ─────────────────────────────────────────────────────────────
 
-const CONTEXT_WINDOW  = 20_000;
-const COMPACT_AT_FRAC = 0.9;   // compact when estimated tokens exceed 90 % of context window
-const COMPACT_AT_TOKENS = Math.floor(CONTEXT_WINDOW * COMPACT_AT_FRAC); // 18 000
+const CONTEXT_WINDOW    = 20_000;
+const COMPACT_AT_TOKENS = 8_000;  // compact early — keeps each request cheap
+const TOOL_OUTPUT_CAP   = 1_500;  // chars stored per tool result in session history
 
 function estimateTokens(msgs) {
   return msgs.reduce((sum, m) => {
@@ -771,11 +771,17 @@ async function queryLLMLoop(messages, { onProgress, onChunk, onThinking, signal,
     const formatReminder = parsed._xmlFallback
       ? `\n\n⚠️ FORMAT REMINDER: You used XML tags for that tool call. Always use plain JSON instead:\n{"type":"${parsed.type}","${parsed.url ? 'url":"' + parsed.url : parsed.command ? 'command":"' + parsed.command : 'query":"' + (parsed.query || '')}"}  — never use <action> or <tool_call> tags.`
       : '';
-    const outputMsg = `${label} result:\n\`\`\`\n${output}\n\`\`\`${formatReminder}`;
+    // Truncate output stored in session history to keep context from bloating.
+    // The full output is still used for the working messages sent to the LLM this turn.
+    const storedOutput = output.length > TOOL_OUTPUT_CAP
+      ? output.slice(0, TOOL_OUTPUT_CAP) + `\n… [truncated — ${output.length - TOOL_OUTPUT_CAP} chars omitted from history]`
+      : output;
+    const outputMsg       = `${label} result:\n\`\`\`\n${output}\n\`\`\`${formatReminder}`;
+    const outputMsgStored = `${label} result:\n\`\`\`\n${storedOutput}\n\`\`\``;
 
     // Session persistence — always simple text
     newMessages.push({ role: 'assistant', content: result.text });
-    newMessages.push({ role: 'user',      content: outputMsg });
+    newMessages.push({ role: 'user',      content: outputMsgStored });
 
     // Working messages — use native format for OpenAI/Anthropic, text for others
     const ntc = result.nativeToolCall;
