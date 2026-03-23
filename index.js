@@ -159,6 +159,13 @@ app.get('/whatsapp/numbers', (req, res) => {
   res.json({ numbers: cfg.whatsappAllowedNumbers || [] });
 });
 
+app.post('/whatsapp/send', async (req, res) => {
+  const { jid, message } = req.body;
+  if (!jid || !message) return res.status(400).json({ error: 'jid and message required' });
+  await sendToJid(jid, message);
+  res.json({ ok: true });
+});
+
 const server = app.listen(6192, '0.0.0.0', () => {
   console.log('Internal CLI API listening on port 6192');
 });

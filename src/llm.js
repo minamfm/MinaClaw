@@ -532,7 +532,7 @@ RULES: Never narrate tool use — just emit the JSON. Chain as many tool calls a
 // ─── queryLLM ─────────────────────────────────────────────────────────────────
 
 // Returns { text, usage, model, nativeToolCall?, aborted? }
-async function queryLLM(messages, { onChunk, onThinking, signal } = {}) {
+async function queryLLM(messages, { onChunk, onThinking, signal, sessionId } = {}) {
   const config      = loadConfig();
   const activeModel = config.activeModel;
   const modelName   = (config.models && config.models[activeModel]) || activeModel;
@@ -543,9 +543,21 @@ async function queryLLM(messages, { onChunk, onThinking, signal } = {}) {
     : config.systemPrompt;
 
   // Use a compact system prompt for Ollama to avoid GPU freeze during prefill
-  const sysPrompt = activeModel === 'ollama'
+  const baseSysPrompt = activeModel === 'ollama'
     ? buildOllamaSysPrompt(memoryContext)
     : fullSysPrompt;
+
+  // Append session channel context so the agent knows which channel it's on
+  // and can route background notifications (notify.py --channel) correctly.
+  let channelNote = '';
+  if (sessionId) {
+    if (sessionId.startsWith('wa:')) {
+      channelNote = `\n\n[Session channel: WhatsApp | JID: ${sessionId.slice(3)}]`;
+    } else {
+      channelNote = `\n\n[Session channel: Telegram]`;
+    }
+  }
+  const sysPrompt = channelNote ? baseSysPrompt + channelNote : baseSysPrompt;
 
   const fullMessages = [
     { role: 'system', content: sysPrompt },
@@ -656,7 +668,7 @@ async function queryLLMLoop(messages, { onProgress, onChunk, onThinking, signal,
       return { text: '', usage: totalUsage, model: lastModel, parsed: { type: 'text', response: '' }, newMessages, aborted: true };
     }
 
-    const result = await queryLLM(msgs, { onChunk, onThinking, signal });
+    const result = await queryLLM(msgs, { onChunk, onThinking, signal, sessionId });
     lastModel = result.model;
     if (result.usage) {
       if (!totalUsage) totalUsage = { input: 0, output: 0 };
