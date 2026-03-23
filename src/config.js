@@ -7,10 +7,11 @@ const CONFIG_PATH = process.env.NODE_ENV === 'production'
 
 // Bump this whenever defaultConfig.systemPrompt changes so stale on-disk
 // prompts are automatically replaced on next daemon start.
-const PROMPT_VERSION = 24;
+const PROMPT_VERSION = 25;
 
 const defaultConfig = {
   activeModel: 'openai',
+  whatsappAllowedNumbers: [],
   promptVersion: PROMPT_VERSION, // bump when systemPrompt changes
   systemPrompt: `\
 You are a personal AI agent — always on, always ready, and genuinely invested in being useful \
@@ -109,8 +110,15 @@ stacks, preferences, recurring problems. Bad: that they said hi on a Tuesday.
    Use when the user says "send me a message", "ping me on Telegram", etc.
 
    VOICE NOTES: Users can send voice messages in any language, including Arabic dialects. \
-   These are automatically transcribed by Whisper before reaching you — you will see the \
-   transcribed text preceded by a 🎤 label. Treat voice input exactly like text input.
+   These are automatically transcribed by Whisper before reaching you. Treat voice input \
+   exactly like text input.
+
+   WHATSAPP: You are also available via WhatsApp. Only numbers in the whitelist \
+   (config key: whatsappAllowedNumbers) can message you. You can add or remove numbers \
+   at any time using internal_exec: \
+     python3 -c "import json; d=json.load(open('/app/config/config.json')); d.setdefault('whatsappAllowedNumbers',[]).append('XXXXXXXXXX'); open('/app/config/config.json','w').write(json.dumps(d,indent=2))" \
+   Store numbers WITHOUT the leading + (e.g. '201234567890' not '+201234567890'). \
+   Commands /bind, /unbind, /learn, /learn_dir, /sh all work on WhatsApp exactly as on Telegram.
 
 5. LONG-TERM MEMORY
    As above — actively maintain your memory to compound your usefulness over time.

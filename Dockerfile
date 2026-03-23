@@ -15,7 +15,9 @@ RUN apk add --no-cache \
     git \
     python3 \
     py3-pip \
-    py3-requests
+    py3-requests \
+    make \
+    g++
 
 # Tell Playwright where to find the local chromium
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
@@ -29,7 +31,7 @@ RUN npm install
 COPY . .
 
 # Create persistent storage directories
-RUN mkdir -p /app/config /app/skills /mnt/safe
+RUN mkdir -p /app/config /app/config/whatsapp-auth /app/skills /mnt/safe
 
 # Expose internal API port for the host CLI
 EXPOSE 6192

@@ -5,9 +5,10 @@ const {
   intro, outro, select, text, password, confirm,
   note, spinner, isCancel, log,
 } = require('@clack/prompts');
-const fs = require('fs');
-const path = require('path');
-const axios = require('axios');
+const fs     = require('fs');
+const path   = require('path');
+const axios  = require('axios');
+const qrcode = require('qrcode-terminal');
 const { execSync, exec, spawn } = require('child_process');
 const yaml = require('js-yaml');
 
@@ -236,6 +237,7 @@ async function configureMenu() {
           label: 'Telegram Bot',
           hint: configured(env, 'TELEGRAM_BOT_TOKEN') ? '● connected' : '○ not configured',
         },
+        { value: 'whatsapp', label: 'WhatsApp' },
         {
           value: 'openai',
           label: `OpenAI  ${apiBadge(env, 'OPENAI_API_KEY', config.models.openai)}`,
@@ -288,6 +290,7 @@ async function configureMenu() {
     try {
       switch (choice) {
         case 'telegram':  await configureTelegram(); break;
+        case 'whatsapp':  await configureWhatsApp(); break;
         case 'openai':    await configureOpenAI(); break;
         case 'anthropic': await configureAnthropic(); break;
         case 'gemini':    await configureGemini(); break;
@@ -558,6 +561,154 @@ async function configureWebSearch() {
       if (cx && cx !== env.GOOGLE_SEARCH_CX) env.GOOGLE_SEARCH_CX = cx;
       if (apiKey || cx) { saveEnv(env); log.success('Google Search credentials saved.'); }
       else              { log.info('No changes made.'); }
+    }
+  }
+}
+
+// ─── WhatsApp ─────────────────────────────────────────────────────────────────
+
+async function configureWhatsApp() {
+  while (true) {
+    let status = 'unknown';
+    let connectedNumber = null;
+    let numbers = [];
+
+    try {
+      const [statusRes, numbersRes] = await Promise.all([
+        axios.get(`${DAEMON}/whatsapp/status`, { timeout: 3000 }),
+        axios.get(`${DAEMON}/whatsapp/numbers`, { timeout: 3000 }),
+      ]);
+      status = statusRes.data.status;
+      connectedNumber = statusRes.data.number;
+      numbers = numbersRes.data.numbers || [];
+    } catch {
+      status = 'daemon_unreachable';
+    }
+
+    const statusLabel =
+      status === 'connected'        ? green(`● Connected${connectedNumber ? ' (' + connectedNumber + ')' : ''}`) :
+      status === 'qr'               ? yellow('○ Waiting for QR scan') :
+      status === 'connecting'       ? yellow('○ Connecting…') :
+      status === 'disconnected'     ? yellow('○ Disconnected') :
+      status === 'daemon_unreachable' ? red('○ Daemon unreachable') :
+      dim('○ ' + status);
+
+    const choice = orCancel(await select({
+      message: `WhatsApp  ${statusLabel}`,
+      options: [
+        { value: 'link',    label: 'Link Device (QR code)', hint: status === 'connected' ? 'already connected' : '' },
+        { value: 'numbers', label: `Manage Allowed Numbers  ${dim('(' + numbers.length + ' bound)')}` },
+        { value: 'back',    label: '← Back' },
+      ],
+    }));
+
+    if (choice === 'back') return;
+    if (choice === 'link')    await linkWhatsApp();
+    if (choice === 'numbers') await manageWhatsAppNumbers(numbers);
+  }
+}
+
+async function linkWhatsApp() {
+  let st;
+  try {
+    const res = await axios.get(`${DAEMON}/whatsapp/status`, { timeout: 3000 });
+    st = res.data.status;
+  } catch {
+    log.error('Cannot reach daemon. Is it running?');
+    return;
+  }
+
+  if (st === 'connected') {
+    log.info('WhatsApp is already connected.');
+    return;
+  }
+
+  log.info('Open WhatsApp on your phone → Linked Devices → Link a Device');
+  log.info('Press Ctrl+C to cancel.\n');
+
+  const s = spinner();
+  s.start('Waiting for QR code from daemon…');
+
+  for (let i = 0; i < 60; i++) {
+    try {
+      const res = await axios.get(`${DAEMON}/whatsapp/qr`, { timeout: 3000 });
+      if (res.data.qr) {
+        s.stop('QR code ready — scan with WhatsApp:');
+        console.log('');
+        qrcode.generate(res.data.qr, { small: true });
+        console.log('');
+        log.info('Waiting for scan…');
+
+        for (let j = 0; j < 30; j++) {
+          await new Promise(r => setTimeout(r, 2000));
+          try {
+            const check = await axios.get(`${DAEMON}/whatsapp/status`, { timeout: 3000 });
+            if (check.data.status === 'connected') {
+              log.success(`Connected as ${check.data.number || 'unknown'}.`);
+              return;
+            }
+          } catch {}
+        }
+        log.warn('Timed out waiting for scan. Try again.');
+        return;
+      }
+    } catch {}
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  s.stop('');
+  log.warn('No QR code available. Make sure the daemon is running and try again.');
+}
+
+async function manageWhatsAppNumbers(numbers) {
+  while (true) {
+    const bound = numbers.map(n => ({ value: n, label: `+${n}` }));
+    bound.push({ value: '__add__',  label: '+ Bind a number' });
+    bound.push({ value: '__back__', label: '← Back' });
+
+    const selected = orCancel(await select({
+      message: `Allowed Numbers  ${dim('(only these numbers can message the agent)')}`,
+      options: bound,
+    }));
+
+    if (selected === '__back__') return;
+
+    if (selected === '__add__') {
+      const num = orCancel(await text({
+        message: 'Phone number with country code:',
+        placeholder: '+201234567890',
+      }));
+      if (!num) continue;
+      try {
+        const res = await axios.post(`${DAEMON}/whatsapp/bind`, { number: num }, { timeout: 5000 });
+        numbers = res.data.numbers || numbers;
+        log.success(`Bound ${num}.`);
+      } catch {
+        log.error('Failed to bind number — is the daemon running?');
+      }
+      continue;
+    }
+
+    const action = orCancel(await select({
+      message: `+${selected}`,
+      options: [
+        { value: 'unbind', label: red('Unbind this number') },
+        { value: 'back',   label: '← Back' },
+      ],
+    }));
+
+    if (action === 'back') continue;
+
+    if (action === 'unbind') {
+      const ok = orCancel(await confirm({ message: `Unbind +${selected}?`, initialValue: false }));
+      if (ok) {
+        try {
+          const res = await axios.post(`${DAEMON}/whatsapp/unbind`, { number: selected }, { timeout: 5000 });
+          numbers = res.data.numbers || numbers.filter(n => n !== selected);
+          log.success(`Unbound +${selected}.`);
+        } catch {
+          log.error('Failed to unbind — is the daemon running?');
+        }
+      }
     }
   }
 }

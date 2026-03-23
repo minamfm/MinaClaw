@@ -1,9 +1,10 @@
 require('dotenv').config({ path: './config/.env' });
 const express    = require('express');
 const bodyParser = require('body-parser');
-const { startTelegramBot } = require('./src/telegram');
+const { startTelegramBot }                     = require('./src/telegram');
+const { startWhatsAppBot, getStatus: getWAStatus, getQR, sendToJid } = require('./src/whatsapp');
 const { queryLLM, queryLLMLoop, parseResponse } = require('./src/llm');
-const { loadConfig } = require('./src/config');
+const { loadConfig, updateConfig }             = require('./src/config');
 const queue   = require('./src/command-queue');
 const session = require('./src/session');
 
@@ -59,6 +60,24 @@ app.post('/command-result', async (req, res) => {
     for (const msg of newMessages) session.append(sessionId, msg.role, msg.content);
     if (usage) session.addUsage(sessionId, usage.input, usage.output);
 
+    // Route result to WhatsApp if chatId is a JID, otherwise Telegram
+    const isWhatsApp = typeof chatId === 'string' && chatId.includes('@');
+
+    if (isWhatsApp) {
+      if (parsed.type === 'command_proposal') {
+        const { sendToJid: wa } = require('./src/whatsapp');
+        const id = queue.enqueue(chatId, parsed.command, parsed.explanation);
+        await wa(chatId,
+          `📋 *Command Proposal*\n\nReason: ${parsed.explanation}\nCommand: ${parsed.command}\n\nReply *yes* to approve or *no* to cancel.`
+        ).catch(() => {});
+      } else {
+        const { sendToJid: wa } = require('./src/whatsapp');
+        const reply = (parsed.type === 'text' ? parsed.response : null) || text;
+        if (reply) await wa(chatId, reply).catch(() => {});
+      }
+      return res.json({ ok: true });
+    }
+
     if (!bot) return res.json({ ok: true });
 
     if (parsed.type === 'command_proposal') {
@@ -102,11 +121,52 @@ app.post('/session/clear', (req, res) => {
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
+// ─── WhatsApp API ─────────────────────────────────────────────────────────────
+
+app.get('/whatsapp/status', (req, res) => res.json(getWAStatus()));
+
+app.get('/whatsapp/qr', (req, res) => {
+  const qr = getQR();
+  if (!qr) return res.status(404).json({ error: 'No QR available' });
+  res.json({ qr });
+});
+
+app.post('/whatsapp/bind', (req, res) => {
+  const { number } = req.body;
+  if (!number) return res.status(400).json({ error: 'number required' });
+  const normalized = number.replace('+', '');
+  const cfg  = loadConfig();
+  const list = [...(cfg.whatsappAllowedNumbers || [])];
+  if (!list.some(n => n.replace('+', '') === normalized)) {
+    list.push(normalized);
+    updateConfig({ whatsappAllowedNumbers: list });
+  }
+  res.json({ ok: true, numbers: list });
+});
+
+app.post('/whatsapp/unbind', (req, res) => {
+  const { number } = req.body;
+  if (!number) return res.status(400).json({ error: 'number required' });
+  const normalized = number.replace('+', '');
+  const cfg  = loadConfig();
+  const list = (cfg.whatsappAllowedNumbers || []).filter(n => n.replace('+', '') !== normalized);
+  updateConfig({ whatsappAllowedNumbers: list });
+  res.json({ ok: true, numbers: list });
+});
+
+app.get('/whatsapp/numbers', (req, res) => {
+  const cfg = loadConfig();
+  res.json({ numbers: cfg.whatsappAllowedNumbers || [] });
+});
+
 const server = app.listen(6192, '0.0.0.0', () => {
   console.log('Internal CLI API listening on port 6192');
 });
 
 const bot = startTelegramBot();
+
+// Start WhatsApp bot (non-fatal — logs error if it fails)
+startWhatsAppBot().catch(err => console.error('[WhatsApp] Startup error:', err.message));
 
 if (!bot) {
   console.log('Running in headless mode (no Telegram bot).');
