@@ -280,20 +280,18 @@ async function queryOpenAICompat(client, messages, model, onChunk) {
   return { raw: text, usage };
 }
 
-async function queryKimi(messages, model, onChunk, onThinking) {
-  const stream = await kimi.chat.completions.create({ model, messages, stream: true });
-  let text = '', thinking = '';
+async function queryKimi(messages, model, onChunk) {
+  const stream = await kimi.chat.completions.create({
+    model, messages, stream: true,
+    extra_body: { thinking: { type: 'disabled' } },
+  });
+  let text = '';
   let usage = { input: 0, output: 0 };
   for await (const chunk of stream) {
     if (chunk.usage) usage = { input: chunk.usage.prompt_tokens, output: chunk.usage.completion_tokens };
-    const delta = chunk.choices[0]?.delta;
-    if (!delta) continue;
-    if (delta.reasoning_content) {
-      thinking += delta.reasoning_content;
-      if (onThinking) onThinking(thinking);
-    }
-    if (delta.content) {
-      text += delta.content;
+    const delta = chunk.choices[0]?.delta?.content;
+    if (delta) {
+      text += delta;
       if (onChunk && text.length > 40 && !text.trimStart().startsWith('{')) onChunk(text);
     }
   }
