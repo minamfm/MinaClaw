@@ -85,4 +85,20 @@ function clearThinking(sessionId) {
   try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch { /* ignore */ }
 }
 
-module.exports = { get, save, append, addUsage, getUsage, clear, updateThinking, getThinking, clearThinking };
+function list() {
+  try {
+    return fs.readdirSync(SESSIONS_DIR)
+      .filter(f => f.endsWith('.json'))
+      .map(f => {
+        const id = f.slice(0, -5); // strip .json
+        const p  = path.join(SESSIONS_DIR, f);
+        const stat = fs.statSync(p);
+        let messageCount = 0;
+        try { const d = JSON.parse(fs.readFileSync(p, 'utf8')); messageCount = Array.isArray(d) ? d.length : 0; } catch {}
+        return { id, lastActivity: stat.mtimeMs, messageCount };
+      })
+      .sort((a, b) => b.lastActivity - a.lastActivity);
+  } catch { return []; }
+}
+
+module.exports = { get, save, append, addUsage, getUsage, clear, list, updateThinking, getThinking, clearThinking };

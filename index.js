@@ -132,6 +132,14 @@ app.post('/session/clear', (req, res) => {
   res.json({ ok: true });
 });
 
+app.get('/sessions/list', (req, res) => {
+  res.json(session.list());
+});
+
+app.get('/session/:id/history', (req, res) => {
+  res.json(session.get(req.params.id));
+});
+
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 // ─── WhatsApp API ─────────────────────────────────────────────────────────────

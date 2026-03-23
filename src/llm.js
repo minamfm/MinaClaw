@@ -272,7 +272,7 @@ async function queryOpenAI(messages, model, onChunk, onThinking, signal) {
 
 // Shared streaming helper for OpenAI-compatible providers without native tool calling
 async function queryOpenAICompat(client, messages, model, onChunk) {
-  const stream = await client.chat.completions.create({ model, messages, stream: true });
+  const stream = await client.chat.completions.create({ model, messages, stream: true, stream_options: { include_usage: true } });
   let text = '', usage = { input: 0, output: 0 };
   for await (const chunk of stream) {
     if (chunk.usage) usage = { input: chunk.usage.prompt_tokens, output: chunk.usage.completion_tokens };
@@ -289,6 +289,7 @@ async function queryOpenAICompat(client, messages, model, onChunk) {
 async function queryKimi(messages, model, onChunk) {
   const stream = await kimi.chat.completions.create({
     model, messages, stream: true,
+    stream_options: { include_usage: true },
     extra_body: { thinking: { type: 'disabled' } },
   });
   let text = '';

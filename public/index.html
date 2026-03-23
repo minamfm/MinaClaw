@@ -199,20 +199,22 @@
   <!-- ── Sessions ── -->
   <div id="sessions" class="panel">
     <div class="card">
-      <h3>Clear Session</h3>
-      <p style="font-size:13px;color:var(--muted);margin-bottom:12px;">Wipes the conversation history for a session. The CLI uses <code>cli</code>, Telegram uses the chat ID, WhatsApp uses the JID.</p>
-      <div class="row">
-        <div class="field"><label>Session ID</label><input id="sess-id" class="inp" placeholder="cli"></div>
-        <button class="btn red" onclick="clearSession()">Clear</button>
+      <h3>Sessions <button class="btn sec sm" onclick="loadSessionsList()" style="margin-left:6px;">↻</button></h3>
+      <div class="field" style="margin-bottom:10px;">
+        <label>Select Session</label>
+        <select id="session-select" class="inp"><option value="">Loading…</option></select>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn sec" onclick="viewSessionLog()">View Log</button>
+        <button class="btn red" onclick="clearSession()">Clear Session</button>
       </div>
     </div>
-    <div class="card">
-      <h3>Session Usage</h3>
-      <div class="row" style="margin-bottom:10px;">
-        <div class="field"><input id="usage-sess-id" class="inp" placeholder="cli"></div>
-        <button class="btn sec" onclick="loadUsage()">Load</button>
-      </div>
-      <div id="usage-display" style="font-size:13px;color:var(--muted);">Enter a session ID and click Load.</div>
+    <div class="card" id="session-log-card" style="display:none;">
+      <h3 style="display:flex;justify-content:space-between;align-items:center;">
+        <span>Conversation Log</span>
+        <span id="session-log-meta" style="font-size:11px;color:var(--muted);text-transform:none;font-weight:400;letter-spacing:0;"></span>
+      </h3>
+      <div id="session-log-messages" style="display:flex;flex-direction:column;gap:6px;max-height:460px;overflow-y:auto;padding-top:4px;"></div>
     </div>
   </div>
 
@@ -516,28 +518,75 @@ async function schedCancel(id) {
 
 // ── Sessions ──────────────────────────────────────────────────────────────────
 
-async function clearSession() {
-  const id = document.getElementById('sess-id').value.trim() || 'cli';
-  if (!confirm(`Clear session "${id}"? This cannot be undone.`)) return;
-  await api('POST', '/session/clear', { sessionId: id });
-  toast(`Session "${id}" cleared`);
+function relTime(ms) {
+  const diff = Date.now() - ms;
+  const m = Math.floor(diff / 60000);
+  if (m < 1)  return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
 }
 
-async function loadUsage() {
-  const id = document.getElementById('usage-sess-id').value.trim() || 'cli';
-  const el = document.getElementById('usage-display');
+async function loadSessionsList() {
+  const sel = document.getElementById('session-select');
   try {
-    // Usage isn't a dedicated API yet — send a dummy chat and extract usage field
-    el.textContent = 'Loading…';
-    // Use health endpoint as a quick check and fall back to informational message
-    await api('GET', '/health');
-    el.textContent = `Session "${id}" — usage stats are accumulated during active sessions. Start a conversation in the Chat tab with sessionId="${id}" to see live counts.`;
+    const sessions = await api('GET', '/sessions/list');
+    if (!sessions.length) {
+      sel.innerHTML = '<option value="">No sessions found</option>';
+      return;
+    }
+    sel.innerHTML = sessions.map(s =>
+      `<option value="${esc(s.id)}">${esc(s.id)} — ${relTime(s.lastActivity)}, ${s.messageCount} msgs</option>`
+    ).join('');
   } catch (e) {
-    el.textContent = 'Error: ' + e.message;
+    sel.innerHTML = `<option value="">Error: ${esc(e.message)}</option>`;
   }
 }
 
-TAB_LOADERS.sessions = () => {};
+async function viewSessionLog() {
+  const id = document.getElementById('session-select').value;
+  if (!id) return toast('Select a session first');
+  const card = document.getElementById('session-log-card');
+  const meta = document.getElementById('session-log-meta');
+  const box  = document.getElementById('session-log-messages');
+  box.innerHTML = '<span class="spin"></span>';
+  card.style.display = '';
+  try {
+    const history = await api('GET', '/session/' + encodeURIComponent(id) + '/history');
+    meta.textContent = `${id} · ${history.length} messages`;
+    if (!history.length) {
+      box.innerHTML = '<p style="color:var(--muted);font-size:13px;">No messages in this session.</p>';
+      return;
+    }
+    box.innerHTML = history.map(m => {
+      const content = Array.isArray(m.content)
+        ? m.content.map(c => typeof c === 'string' ? c : (c.text || JSON.stringify(c))).join('\n')
+        : String(m.content || '');
+      const roleColor = m.role === 'user' ? 'var(--accent)' : m.role === 'assistant' ? 'var(--text)' : 'var(--muted)';
+      const roleBg = m.role === 'user' ? 'rgba(74,158,255,.08)' : m.role === 'assistant' ? 'var(--bg3)' : 'transparent';
+      return `<div style="background:${roleBg};border:1px solid var(--border);border-radius:6px;padding:8px 12px;">
+        <div style="font-size:10px;font-weight:600;color:${roleColor};text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">${esc(m.role)}</div>
+        <pre style="font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;font-family:inherit;margin:0;">${esc(content.slice(0, 2000))}${content.length > 2000 ? '\n…' : ''}</pre>
+      </div>`;
+    }).join('');
+    box.scrollTop = box.scrollHeight;
+  } catch (e) {
+    box.innerHTML = `<p style="color:var(--error);font-size:13px;">Error: ${esc(e.message)}</p>`;
+  }
+}
+
+async function clearSession() {
+  const id = document.getElementById('session-select').value;
+  if (!id) return toast('Select a session first');
+  if (!confirm(`Clear session "${id}"? This cannot be undone.`)) return;
+  await api('POST', '/session/clear', { sessionId: id });
+  toast(`Session "${id}" cleared`);
+  document.getElementById('session-log-card').style.display = 'none';
+  loadSessionsList();
+}
+
+TAB_LOADERS.sessions = loadSessionsList;
 
 // ── Logs ──────────────────────────────────────────────────────────────────────
 
