@@ -311,6 +311,10 @@ async function processMessage(jid, text) {
   // Typing presence
   sock.sendPresenceUpdate('composing', jid).catch(() => {});
 
+  // Record the active WhatsApp JID so notify.py can route back here
+  // even if the agent forgets to pass --channel.
+  try { fs.writeFileSync('/tmp/last_wa_jid', jid); } catch {}
+
   const sessionId = 'wa:' + jid;
 
   // Reminder scheduling — handle before LLM so the reminder fires back to WhatsApp
