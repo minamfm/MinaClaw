@@ -1013,7 +1013,8 @@ async function manageSafeFolders() {
 
       doc.services.minaclaw.volumes = [...volumes, `${hostPath}:/mnt/safe/${alias}`];
       saveAgentCompose(doc);
-      log.success(`Added "${hostPath}" as /mnt/safe/${alias}. Restart daemon to apply.`);
+      log.success(`Added "${hostPath}" as /mnt/safe/${alias}.`);
+      await offerDaemonRestart();
       continue;
     }
 
@@ -1040,7 +1041,8 @@ async function manageSafeFolders() {
       if (ok) {
         doc.services.minaclaw.volumes = volumes.filter(v => v !== selected);
         saveAgentCompose(doc);
-        log.success('Removed. Restart daemon to apply.');
+        log.success('Removed.');
+        await offerDaemonRestart();
       } else {
         log.info('Cancelled.');
       }
@@ -1054,9 +1056,21 @@ async function manageSafeFolders() {
       const newMount = `${hostPath}:/mnt/safe/${newAlias}`;
       doc.services.minaclaw.volumes = volumes.map(v => v === selected ? newMount : v);
       saveAgentCompose(doc);
-      log.success(`Renamed to "${newAlias}". Restart daemon to apply.`);
+      log.success(`Renamed to "${newAlias}".`);
+      await offerDaemonRestart();
     }
   }
+}
+
+async function offerDaemonRestart() {
+  const yes = orCancel(await confirm({
+    message: 'Restart daemon now to apply the change?',
+    initialValue: true,
+  }));
+  if (!yes) { log.info('Run "Daemon Management → Restart" when ready.'); return; }
+  await runDockerCommand('Stopping daemon', 'docker compose down');
+  const built = await runDockerCommand('Starting daemon', 'docker compose up -d');
+  if (built) log.success('Daemon restarted — new mounts are active.');
 }
 
 // ─── Watcher service ──────────────────────────────────────────────────────────
