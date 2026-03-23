@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 'use strict';
 
-const inquirer = require('inquirer');
+const {
+  intro, outro, select, text, password, confirm,
+  note, spinner, isCancel, log,
+} = require('@clack/prompts');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
@@ -15,13 +18,12 @@ const SKILLS_DIR = path.join(PROJECT_ROOT, 'skills');
 // If invoked as `minaclaw watch`, skip the menu and go straight to watch mode.
 if (process.argv[2] === 'watch') {
   watchMode().catch(console.error);
-  // watchMode() never resolves; process stays alive until Ctrl+C
-  process.exitCode = 0; // suppress any exit-code noise
+  process.exitCode = 0;
 }
 
-const CONFIG_DIR = path.join(PROJECT_ROOT, 'config');
-const COMPOSE_FILE = path.join(PROJECT_ROOT, 'docker-compose.yml');
-const ENV_PATH = path.join(CONFIG_DIR, '.env');
+const CONFIG_DIR      = path.join(PROJECT_ROOT, 'config');
+const COMPOSE_FILE    = path.join(PROJECT_ROOT, 'docker-compose.yml');
+const ENV_PATH        = path.join(CONFIG_DIR, '.env');
 const CONFIG_JSON_PATH = path.join(CONFIG_DIR, 'config.json');
 
 if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
@@ -52,7 +54,7 @@ const DEFAULT_CONFIG = {
   models: {
     openai:    'gpt-5.4',
     gemini:    'gemini-2.5-flash',
-    kimi:      'moonshot-v1-8k',
+    kimi:      'kimi-k2.5',
     ollama:    'llama3',
     anthropic: 'claude-sonnet-4-6',
     mistral:   'mistral-large-2411',
@@ -90,104 +92,131 @@ function apiBadge(env, envKey, model) {
     : yellow('○ not configured');
 }
 
+function configured(env, key) {
+  return !!(env[key] && env[key].trim());
+}
+
+// ─── Cancellation helper ──────────────────────────────────────────────────────
+
+class UserCancel extends Error {}
+
+function orCancel(v) {
+  if (isCancel(v)) throw new UserCancel();
+  return v;
+}
+
+// ─── External editor ──────────────────────────────────────────────────────────
+
+function editWithExternalEditor(defaultContent) {
+  const tmpFile = path.join('/tmp', `minaclaw-edit-${Date.now()}.txt`);
+  fs.writeFileSync(tmpFile, defaultContent);
+  const editor = process.env.EDITOR || process.env.VISUAL || 'nano';
+  return new Promise((resolve) => {
+    const child = spawn(editor, [tmpFile], { stdio: 'inherit' });
+    child.on('close', () => {
+      const content = fs.existsSync(tmpFile) ? fs.readFileSync(tmpFile, 'utf8') : defaultContent;
+      try { fs.unlinkSync(tmpFile); } catch {}
+      resolve(content);
+    });
+    child.on('error', () => resolve(defaultContent));
+  });
+}
+
 // ─── Provider model lists ─────────────────────────────────────────────────────
 
 const OPENAI_MODELS = [
-  // GPT-5.4 family (latest generation)
-  { name: 'gpt-5.4          (flagship, latest generation)',          value: 'gpt-5.4' },
-  { name: 'gpt-5.4-mini     (fast & cost-efficient)',                value: 'gpt-5.4-mini' },
-  { name: 'gpt-5.4-nano     (smallest, cheapest)',                   value: 'gpt-5.4-nano' },
-  new inquirer.Separator('── GPT-4.1 ──'),
-  // GPT-4.1 family
-  { name: 'gpt-4.1          (flagship, best coding & instruction)',  value: 'gpt-4.1' },
-  { name: 'gpt-4.1-mini     (fast & cost-efficient)',                value: 'gpt-4.1-mini' },
-  { name: 'gpt-4.1-nano     (smallest, cheapest)',                   value: 'gpt-4.1-nano' },
-  new inquirer.Separator('── GPT-4o ──'),
-  { name: 'gpt-4o           (multimodal, vision capable)',           value: 'gpt-4o' },
-  { name: 'gpt-4o-mini      (affordable GPT-4o)',                    value: 'gpt-4o-mini' },
-  new inquirer.Separator('── Reasoning (o-series) ──'),
-  { name: 'o3               (frontier reasoning, math & science)',   value: 'o3' },
-  { name: 'o4-mini          (fast reasoning, cost-efficient)',        value: 'o4-mini' },
-  { name: 'o3-mini          (small reasoning, STEM-optimized)',      value: 'o3-mini' },
-  { name: 'o3-pro           (extended compute, hardest tasks)',      value: 'o3-pro' },
-  { name: 'o1               (original reasoning model)',             value: 'o1' },
+  { value: 'gpt-5.4',      label: 'gpt-5.4',      hint: 'flagship, latest generation' },
+  { value: 'gpt-5.4-mini', label: 'gpt-5.4-mini', hint: 'fast & cost-efficient' },
+  { value: 'gpt-5.4-nano', label: 'gpt-5.4-nano', hint: 'smallest, cheapest' },
+  { value: 'gpt-4.1',      label: 'gpt-4.1',      hint: 'best coding & instruction' },
+  { value: 'gpt-4.1-mini', label: 'gpt-4.1-mini', hint: 'fast & cost-efficient' },
+  { value: 'gpt-4.1-nano', label: 'gpt-4.1-nano', hint: 'smallest, cheapest' },
+  { value: 'gpt-4o',       label: 'gpt-4o',       hint: 'multimodal, vision capable' },
+  { value: 'gpt-4o-mini',  label: 'gpt-4o-mini',  hint: 'affordable GPT-4o' },
+  { value: 'o3',           label: 'o3',           hint: 'reasoning — frontier, math & science' },
+  { value: 'o4-mini',      label: 'o4-mini',      hint: 'reasoning — fast, cost-efficient' },
+  { value: 'o3-mini',      label: 'o3-mini',      hint: 'reasoning — STEM-optimized' },
+  { value: 'o3-pro',       label: 'o3-pro',       hint: 'reasoning — extended compute, hardest tasks' },
+  { value: 'o1',           label: 'o1',           hint: 'reasoning — original model' },
 ];
 
 const GEMINI_MODELS = [
-  // Gemini 2.5 (stable)
-  { name: 'gemini-2.5-flash  (fast, recommended, thinking capable)',  value: 'gemini-2.5-flash' },
-  { name: 'gemini-2.5-pro    (most capable 2.5, 1M context)',         value: 'gemini-2.5-pro' },
-  new inquirer.Separator('── Gemini 1.5 (stable) ──'),
-  { name: 'gemini-1.5-flash  (stable, fast)',                         value: 'gemini-1.5-flash' },
-  { name: 'gemini-1.5-pro    (stable, large context)',                value: 'gemini-1.5-pro' },
+  { value: 'gemini-2.5-flash', label: 'gemini-2.5-flash', hint: 'fast, recommended, thinking capable' },
+  { value: 'gemini-2.5-pro',   label: 'gemini-2.5-pro',   hint: 'most capable 2.5, 1M context' },
+  { value: 'gemini-1.5-flash', label: 'gemini-1.5-flash', hint: 'stable, fast' },
+  { value: 'gemini-1.5-pro',   label: 'gemini-1.5-pro',   hint: 'stable, large context' },
 ];
 
 const CLAUDE_MODELS = [
-  { name: 'claude-opus-4-6       (flagship, 1M context, extended thinking)', value: 'claude-opus-4-6' },
-  { name: 'claude-sonnet-4-6     (balanced speed + intelligence)',            value: 'claude-sonnet-4-6' },
-  { name: 'claude-haiku-4-5-20251001  (fast, high-volume, cost-efficient)',  value: 'claude-haiku-4-5-20251001' },
+  { value: 'claude-opus-4-6',           label: 'claude-opus-4-6',   hint: 'flagship, 1M context, extended thinking' },
+  { value: 'claude-sonnet-4-6',         label: 'claude-sonnet-4-6', hint: 'balanced speed + intelligence' },
+  { value: 'claude-haiku-4-5-20251001', label: 'claude-haiku-4-5',  hint: 'fast, high-volume, cost-efficient' },
 ];
 
 const MISTRAL_MODELS = [
-  { name: 'mistral-large-2411    (top-tier, multilingual reasoning)',  value: 'mistral-large-2411' },
-  { name: 'mistral-medium-latest (balanced cost & capability)',        value: 'mistral-medium-latest' },
-  { name: 'mistral-small-latest  (fast & affordable)',                 value: 'mistral-small-latest' },
-  new inquirer.Separator('── Reasoning ──'),
-  { name: 'magistral-medium-latest (Mistral reasoning model)',         value: 'magistral-medium-latest' },
-  { name: 'magistral-small-latest  (smaller, faster reasoning)',       value: 'magistral-small-latest' },
-  new inquirer.Separator('── Code ──'),
-  { name: 'codestral-latest      (code completion, always current)',   value: 'codestral-latest' },
+  { value: 'mistral-large-2411',      label: 'mistral-large-2411',      hint: 'top-tier, multilingual reasoning' },
+  { value: 'mistral-medium-latest',   label: 'mistral-medium-latest',   hint: 'balanced cost & capability' },
+  { value: 'mistral-small-latest',    label: 'mistral-small-latest',    hint: 'fast & affordable' },
+  { value: 'magistral-medium-latest', label: 'magistral-medium-latest', hint: 'Mistral reasoning model' },
+  { value: 'magistral-small-latest',  label: 'magistral-small-latest',  hint: 'smaller, faster reasoning' },
+  { value: 'codestral-latest',        label: 'codestral-latest',        hint: 'code completion' },
 ];
 
 const GROK_MODELS = [
-  { name: 'grok-4.1              (flagship, 256k context)',            value: 'grok-4.1' },
-  { name: 'grok-4.1-mini         (smaller, 128k context)',             value: 'grok-4.1-mini' },
-  new inquirer.Separator('── Grok 4.1 Fast ──'),
-  { name: 'grok-4.1-fast-reasoning    (2M context, reasoning)',        value: 'grok-4.1-fast-reasoning' },
-  { name: 'grok-4.1-fast-non-reasoning (2M context, standard)',        value: 'grok-4.1-fast-non-reasoning' },
-  new inquirer.Separator('── Grok 3 (previous gen) ──'),
-  { name: 'grok-3-beta           (stable, 131k context)',              value: 'grok-3-beta' },
-  { name: 'grok-3-mini-beta      (smaller, 131k context)',             value: 'grok-3-mini-beta' },
+  { value: 'grok-4.1',                    label: 'grok-4.1',                    hint: 'flagship, 256k context' },
+  { value: 'grok-4.1-mini',               label: 'grok-4.1-mini',               hint: 'smaller, 128k context' },
+  { value: 'grok-4.1-fast-reasoning',     label: 'grok-4.1-fast-reasoning',     hint: '2M context, reasoning' },
+  { value: 'grok-4.1-fast-non-reasoning', label: 'grok-4.1-fast-non-reasoning', hint: '2M context, standard' },
+  { value: 'grok-3-beta',                 label: 'grok-3-beta',                 hint: 'stable, 131k context' },
 ];
 
 const KIMI_MODELS = [
-  { name: 'moonshot-v1-8k    (fast, 8k context)',   value: 'moonshot-v1-8k' },
-  { name: 'moonshot-v1-32k   (32k context)',         value: 'moonshot-v1-32k' },
-  { name: 'moonshot-v1-128k  (128k context)',        value: 'moonshot-v1-128k' },
+  { value: 'kimi-k2.5',              label: 'kimi-k2.5',              hint: 'latest — reasoning, vision, 262K context' },
+  { value: 'kimi-k2-thinking',       label: 'kimi-k2-thinking',       hint: 'deep thinking, 262K context' },
+  { value: 'kimi-k2-thinking-turbo', label: 'kimi-k2-thinking-turbo', hint: 'faster thinking, 262K context' },
+  { value: 'moonshot-v1-128k',       label: 'moonshot-v1-128k',       hint: 'legacy, 128K context' },
+  { value: 'moonshot-v1-32k',        label: 'moonshot-v1-32k',        hint: 'legacy, 32K context' },
+  { value: 'moonshot-v1-8k',         label: 'moonshot-v1-8k',         hint: 'legacy, 8K context' },
 ];
 
 // ─── Main menu ────────────────────────────────────────────────────────────────
 
 async function mainMenu() {
-  while (true) {
-    const { choice } = await inquirer.prompt([{
-      type: 'list',
-      name: 'choice',
-      message: 'MinaClaw — what would you like to do?',
-      choices: [
-        { name: 'Chat with Agent',              value: 'chat' },
-        { name: 'Watch (run Telegram commands)', value: 'watch' },
-        new inquirer.Separator('───────────────'),
-        { name: 'Configure Providers & Model',  value: 'configure' },
-        { name: 'Daemon Management',            value: 'daemon' },
-        { name: 'Manage Safe Folders',          value: 'folders' },
-        new inquirer.Separator('───────────────'),
-        { name: 'Session & Memory',             value: 'session' },
-        { name: 'About MinaClaw',               value: 'about' },
-        new inquirer.Separator('───────────────'),
-        { name: 'Exit',                         value: 'exit' },
-      ],
-    }]);
+  intro(`${bold('MinaClaw')}  Your personal AI agent — always on, always ready`);
 
-    switch (choice) {
-      case 'chat':      await chatSession(); break;
-      case 'watch':     await watchMode(); break;
-      case 'configure': await configureMenu(); break;
-      case 'daemon':    await daemonMenu(); break;
-      case 'folders':   await manageSafeFolders(); break;
-      case 'session':   await sessionMenu(); break;
-      case 'about':     showAbout(); break;
-      case 'exit':      process.exit(0);
+  while (true) {
+    const choice = await select({
+      message: 'What would you like to do?',
+      options: [
+        { value: 'chat',      label: 'Chat with Agent' },
+        { value: 'watch',     label: 'Watch Mode',                hint: 'execute Telegram-approved commands' },
+        { value: 'configure', label: 'Configure Providers & Model' },
+        { value: 'daemon',    label: 'Daemon Management' },
+        { value: 'folders',   label: 'Manage Safe Folders' },
+        { value: 'session',   label: 'Session & Memory' },
+        { value: 'about',     label: 'About MinaClaw' },
+        { value: 'exit',      label: 'Exit' },
+      ],
+    });
+
+    if (isCancel(choice) || choice === 'exit') {
+      outro('Goodbye.');
+      process.exit(0);
+    }
+
+    try {
+      switch (choice) {
+        case 'chat':      await chatSession(); break;
+        case 'watch':     await watchMode(); break;
+        case 'configure': await configureMenu(); break;
+        case 'daemon':    await daemonMenu(); break;
+        case 'folders':   await manageSafeFolders(); break;
+        case 'session':   await sessionMenu(); break;
+        case 'about':     showAbout(); break;
+      }
+    } catch (e) {
+      if (!(e instanceof UserCancel)) throw e;
+      // User navigated back — return to main menu
     }
   }
 }
@@ -199,146 +228,79 @@ async function configureMenu() {
     const config = loadConfig();
     const env = loadEnv();
 
-    const { choice } = await inquirer.prompt([{
-      type: 'list',
-      name: 'choice',
+    const choice = orCancel(await select({
       message: 'Configure — select a provider or setting:',
-      choices: [
+      options: [
         {
-          name: `Telegram Bot     ${(env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_BOT_TOKEN.trim()) ? green('● connected') : yellow('○ not configured')}`,
           value: 'telegram',
+          label: 'Telegram Bot',
+          hint: configured(env, 'TELEGRAM_BOT_TOKEN') ? '● connected' : '○ not configured',
         },
-        new inquirer.Separator(),
         {
-          name: `OpenAI           ${apiBadge(env, 'OPENAI_API_KEY', config.models.openai)}`,
           value: 'openai',
+          label: `OpenAI  ${apiBadge(env, 'OPENAI_API_KEY', config.models.openai)}`,
+          hint: 'also required for voice transcription (Whisper)',
         },
         {
-          name: `Anthropic        ${apiBadge(env, 'ANTHROPIC_API_KEY', config.models.anthropic)}`,
           value: 'anthropic',
+          label: `Anthropic  ${apiBadge(env, 'ANTHROPIC_API_KEY', config.models.anthropic)}`,
         },
         {
-          name: `Gemini           ${apiBadge(env, 'GEMINI_API_KEY', config.models.gemini)}`,
           value: 'gemini',
+          label: `Gemini  ${apiBadge(env, 'GEMINI_API_KEY', config.models.gemini)}`,
         },
         {
-          name: `Mistral          ${apiBadge(env, 'MISTRAL_API_KEY', config.models.mistral)}`,
           value: 'mistral',
+          label: `Mistral  ${apiBadge(env, 'MISTRAL_API_KEY', config.models.mistral)}`,
         },
         {
-          name: `xAI Grok         ${apiBadge(env, 'XAI_API_KEY', config.models.grok)}`,
           value: 'grok',
+          label: `xAI Grok  ${apiBadge(env, 'XAI_API_KEY', config.models.grok)}`,
         },
         {
-          name: `Kimi (Moonshot)  ${apiBadge(env, 'KIMI_API_KEY', config.models.kimi)}`,
           value: 'kimi',
+          label: `Kimi (Moonshot)  ${apiBadge(env, 'KIMI_API_KEY', config.models.kimi)}`,
         },
         {
-          name: `Ollama            ${green('● ' + config.models.ollama)}  ${dim(env.OLLAMA_URL || 'http://localhost:11434')}`,
           value: 'ollama',
+          label: `Ollama  ${green('● ' + config.models.ollama)}`,
+          hint: env.OLLAMA_URL_DISPLAY || 'http://localhost:11434',
         },
-        new inquirer.Separator(),
         {
-          name: `Active Provider  ${cyan(config.activeModel)}  ${dim('(' + config.models[config.activeModel] + ')')}`,
           value: 'active',
+          label: 'Active Provider',
+          hint: `${config.activeModel}  (${config.models[config.activeModel]})`,
         },
-        { name: 'System Prompt',  value: 'prompt' },
-        new inquirer.Separator(),
+        { value: 'prompt',    label: 'System Prompt' },
         {
-          name: `Web Search       ${
-            (env.BRAVE_API_KEY && env.BRAVE_API_KEY.trim())
-              ? green('● Brave Search')
-              : (env.GOOGLE_SEARCH_API_KEY && env.GOOGLE_SEARCH_CX)
-                ? green('● Google Search')
-                : yellow('○ DDG fallback (set a key for full search)')
-          }`,
           value: 'websearch',
+          label: 'Web Search',
+          hint: (env.BRAVE_API_KEY && env.BRAVE_API_KEY.trim())       ? '● Brave Search'
+              : (env.GOOGLE_SEARCH_API_KEY && env.GOOGLE_SEARCH_CX)   ? '● Google Search'
+              : 'DDG fallback',
         },
-        new inquirer.Separator(),
-        { name: '← Back',         value: 'back' },
+        { value: 'back', label: '← Back' },
       ],
-    }]);
-
-    if (choice === 'back') return;
-    switch (choice) {
-      case 'telegram':  await configureTelegram(); break;
-      case 'openai':    await configureOpenAI(); break;
-      case 'anthropic': await configureAnthropic(); break;
-      case 'gemini':    await configureGemini(); break;
-      case 'mistral':   await configureMistral(); break;
-      case 'grok':      await configureGrok(); break;
-      case 'kimi':      await configureKimi(); break;
-      case 'ollama':    await configureOllama(); break;
-      case 'active':     await selectActiveModel(); break;
-      case 'prompt':     await editSystemPrompt(); break;
-      case 'websearch':  await configureWebSearch(); break;
-    }
-  }
-}
-
-async function configureWebSearch() {
-  const env = loadEnv();
-
-  const activeProvider =
-    (env.BRAVE_API_KEY && env.BRAVE_API_KEY.trim())           ? 'Brave Search'
-    : (env.GOOGLE_SEARCH_API_KEY && env.GOOGLE_SEARCH_CX)    ? 'Google Search'
-    : 'DuckDuckGo (fallback)';
-
-  while (true) {
-    const { choice } = await inquirer.prompt([{
-      type: 'list',
-      name: 'choice',
-      message: `Web Search  ${dim('active: ' + activeProvider)}`,
-      choices: [
-        {
-          name: `Brave Search     ${(env.BRAVE_API_KEY && env.BRAVE_API_KEY.trim()) ? green('● configured') : yellow('○ not set')}  ${dim('2 000 req/month free')}`,
-          value: 'brave',
-        },
-        {
-          name: `Google Search    ${(env.GOOGLE_SEARCH_API_KEY && env.GOOGLE_SEARCH_CX) ? green('● configured') : yellow('○ not set')}  ${dim('100 req/day free')}`,
-          value: 'google',
-        },
-        new inquirer.Separator(),
-        { name: '← Back', value: 'back' },
-      ],
-    }]);
+    }));
 
     if (choice === 'back') return;
 
-    if (choice === 'brave') {
-      console.log(dim('\n  Get a free key at https://api.search.brave.com\n'));
-      const { key } = await inquirer.prompt([{
-        type: 'password',
-        name: 'key',
-        message: 'Brave Search API key (leave blank to keep existing):',
-        mask: '*',
-      }]);
-      if (key) { env.BRAVE_API_KEY = key; saveEnv(env); console.log('✓ Brave Search API key saved.\n'); }
-      else { console.log('No changes made.\n'); }
-    }
-
-    if (choice === 'google') {
-      console.log(dim('\n  Create a Custom Search Engine at https://programmablesearchengine.google.com'));
-      console.log(dim('  then enable the Custom Search API in Google Cloud Console.\n'));
-      const { apiKey } = await inquirer.prompt([{
-        type: 'password',
-        name: 'apiKey',
-        message: 'Google API key (leave blank to keep existing):',
-        mask: '*',
-      }]);
-      const { cx } = await inquirer.prompt([{
-        name: 'cx',
-        message: 'Search Engine ID (cx) (leave blank to keep existing):',
-        default: env.GOOGLE_SEARCH_CX || '',
-      }]);
-      if (apiKey) { env.GOOGLE_SEARCH_API_KEY = apiKey; }
-      if (cx && cx !== (env.GOOGLE_SEARCH_CX || '')) { env.GOOGLE_SEARCH_CX = cx; }
-      if (apiKey || (cx && cx !== (env.GOOGLE_SEARCH_CX || ''))) {
-        saveEnv(env);
-        console.log('✓ Google Search credentials saved.\n');
-      } else {
-        console.log('No changes made.\n');
+    try {
+      switch (choice) {
+        case 'telegram':  await configureTelegram(); break;
+        case 'openai':    await configureOpenAI(); break;
+        case 'anthropic': await configureAnthropic(); break;
+        case 'gemini':    await configureGemini(); break;
+        case 'mistral':   await configureMistral(); break;
+        case 'grok':      await configureGrok(); break;
+        case 'kimi':      await configureKimi(); break;
+        case 'ollama':    await configureOllama(); break;
+        case 'active':    await selectActiveModel(); break;
+        case 'prompt':    await editSystemPrompt(); break;
+        case 'websearch': await configureWebSearch(); break;
       }
+    } catch (e) {
+      if (!(e instanceof UserCancel)) throw e;
     }
   }
 }
@@ -348,203 +310,163 @@ async function configureWebSearch() {
 async function configureTelegram() {
   const env = loadEnv();
   const current = env.TELEGRAM_BOT_TOKEN;
-  console.log(`\nTelegram Bot — ${current ? green('currently configured') : yellow('not configured')}`);
-  if (current) console.log(`Token: ${current.slice(0, 8)}${'*'.repeat(Math.max(0, current.length - 8))}`);
-
-  const { key } = await inquirer.prompt([{
-    type: 'password',
-    name: 'key',
-    message: 'Bot Token (leave blank to keep existing):',
-    mask: '*',
-  }]);
-
-  if (key) {
-    env.TELEGRAM_BOT_TOKEN = key;
-    saveEnv(env);
-    console.log('✓ Telegram token saved.');
-  } else {
-    console.log('No changes made.');
-  }
+  note(
+    current
+      ? `Currently configured: ${current.slice(0, 8)}${'*'.repeat(Math.max(0, current.length - 8))}`
+      : 'Not configured yet.',
+    'Telegram Bot'
+  );
+  const key = orCancel(await password({ message: 'Bot Token (leave blank to keep existing):' }));
+  if (key) { env.TELEGRAM_BOT_TOKEN = key; saveEnv(env); log.success('Telegram token saved.'); }
+  else      { log.info('No changes made.'); }
 }
 
 async function configureOpenAI() {
   const env = loadEnv();
   const config = loadConfig();
-  const current = env.OPENAI_API_KEY;
-  console.log(`\nOpenAI — ${current ? green('currently configured') : yellow('not configured')}`);
+  note(
+    (env.OPENAI_API_KEY
+      ? `Currently configured: ${env.OPENAI_API_KEY.slice(0, 8)}…`
+      : 'Not configured yet.') +
+    '\n\n⚠  OpenAI key is also required for voice note transcription (Whisper API, $0.006/min).\n' +
+    '   Voice notes will fail silently if this key is missing or invalid.',
+    'OpenAI'
+  );
+  const key = orCancel(await password({ message: 'API Key (leave blank to keep existing):' }));
+  if (key) { env.OPENAI_API_KEY = key; saveEnv(env); log.success('API key saved.'); }
 
-  const { key } = await inquirer.prompt([{
-    type: 'password',
-    name: 'key',
-    message: 'API Key (leave blank to keep existing):',
-    mask: '*',
-  }]);
-  if (key) { env.OPENAI_API_KEY = key; saveEnv(env); console.log('✓ API key saved.'); }
-
-  const { model } = await inquirer.prompt([{
-    type: 'list',
-    name: 'model',
+  const model = orCancel(await select({
     message: 'Default model:',
-    choices: OPENAI_MODELS,
-    default: config.models.openai,
-  }]);
+    options: OPENAI_MODELS,
+    initialValue: config.models.openai,
+  }));
   config.models.openai = model;
   saveConfig(config);
-  console.log(`✓ OpenAI set to ${model}.`);
+  log.success(`OpenAI set to ${model}.`);
 }
 
 async function configureAnthropic() {
   const env = loadEnv();
   const config = loadConfig();
-  const current = env.ANTHROPIC_API_KEY;
-  console.log(`\nAnthropic — ${current ? green('currently configured') : yellow('not configured')}`);
+  note(
+    env.ANTHROPIC_API_KEY ? `Currently configured: ${env.ANTHROPIC_API_KEY.slice(0, 8)}…` : 'Not configured yet.',
+    'Anthropic'
+  );
+  const key = orCancel(await password({ message: 'API Key (leave blank to keep existing):' }));
+  if (key) { env.ANTHROPIC_API_KEY = key; saveEnv(env); log.success('API key saved.'); }
 
-  const { key } = await inquirer.prompt([{
-    type: 'password',
-    name: 'key',
-    message: 'API Key (leave blank to keep existing):',
-    mask: '*',
-  }]);
-  if (key) { env.ANTHROPIC_API_KEY = key; saveEnv(env); console.log('✓ API key saved.'); }
-
-  const { model } = await inquirer.prompt([{
-    type: 'list',
-    name: 'model',
+  const model = orCancel(await select({
     message: 'Default model:',
-    choices: CLAUDE_MODELS,
-    default: config.models.anthropic,
-  }]);
+    options: CLAUDE_MODELS,
+    initialValue: config.models.anthropic,
+  }));
   config.models.anthropic = model;
   saveConfig(config);
-  console.log(`✓ Anthropic set to ${model}.`);
+  log.success(`Anthropic set to ${model}.`);
 }
 
 async function configureGemini() {
   const env = loadEnv();
   const config = loadConfig();
-  const current = env.GEMINI_API_KEY;
-  console.log(`\nGemini — ${current ? green('currently configured') : yellow('not configured')}`);
+  note(
+    env.GEMINI_API_KEY ? `Currently configured: ${env.GEMINI_API_KEY.slice(0, 8)}…` : 'Not configured yet.',
+    'Gemini'
+  );
+  const key = orCancel(await password({ message: 'API Key (leave blank to keep existing):' }));
+  if (key) { env.GEMINI_API_KEY = key; saveEnv(env); log.success('API key saved.'); }
 
-  const { key } = await inquirer.prompt([{
-    type: 'password',
-    name: 'key',
-    message: 'API Key (leave blank to keep existing):',
-    mask: '*',
-  }]);
-  if (key) { env.GEMINI_API_KEY = key; saveEnv(env); console.log('✓ API key saved.'); }
-
-  const { model } = await inquirer.prompt([{
-    type: 'list',
-    name: 'model',
+  const model = orCancel(await select({
     message: 'Default model:',
-    choices: GEMINI_MODELS,
-    default: config.models.gemini,
-  }]);
+    options: GEMINI_MODELS,
+    initialValue: config.models.gemini,
+  }));
   config.models.gemini = model;
   saveConfig(config);
-  console.log(`✓ Gemini set to ${model}.`);
+  log.success(`Gemini set to ${model}.`);
 }
 
 async function configureMistral() {
   const env = loadEnv();
   const config = loadConfig();
-  const current = env.MISTRAL_API_KEY;
-  console.log(`\nMistral — ${current ? green('currently configured') : yellow('not configured')}`);
+  note(
+    env.MISTRAL_API_KEY ? `Currently configured: ${env.MISTRAL_API_KEY.slice(0, 8)}…` : 'Not configured yet.',
+    'Mistral'
+  );
+  const key = orCancel(await password({ message: 'API Key (leave blank to keep existing):' }));
+  if (key) { env.MISTRAL_API_KEY = key; saveEnv(env); log.success('API key saved.'); }
 
-  const { key } = await inquirer.prompt([{
-    type: 'password',
-    name: 'key',
-    message: 'API Key (leave blank to keep existing):',
-    mask: '*',
-  }]);
-  if (key) { env.MISTRAL_API_KEY = key; saveEnv(env); console.log('✓ API key saved.'); }
-
-  const { model } = await inquirer.prompt([{
-    type: 'list',
-    name: 'model',
+  const model = orCancel(await select({
     message: 'Default model:',
-    choices: MISTRAL_MODELS,
-    default: config.models.mistral,
-  }]);
+    options: MISTRAL_MODELS,
+    initialValue: config.models.mistral,
+  }));
   config.models.mistral = model;
   saveConfig(config);
-  console.log(`✓ Mistral set to ${model}.`);
+  log.success(`Mistral set to ${model}.`);
 }
 
 async function configureGrok() {
   const env = loadEnv();
   const config = loadConfig();
-  const current = env.XAI_API_KEY;
-  console.log(`\nxAI Grok — ${current ? green('currently configured') : yellow('not configured')}`);
+  note(
+    env.XAI_API_KEY ? `Currently configured: ${env.XAI_API_KEY.slice(0, 8)}…` : 'Not configured yet.',
+    'xAI Grok'
+  );
+  const key = orCancel(await password({ message: 'xAI API Key (leave blank to keep existing):' }));
+  if (key) { env.XAI_API_KEY = key; saveEnv(env); log.success('API key saved.'); }
 
-  const { key } = await inquirer.prompt([{
-    type: 'password',
-    name: 'key',
-    message: 'xAI API Key (leave blank to keep existing):',
-    mask: '*',
-  }]);
-  if (key) { env.XAI_API_KEY = key; saveEnv(env); console.log('✓ API key saved.'); }
-
-  const { model } = await inquirer.prompt([{
-    type: 'list',
-    name: 'model',
+  const model = orCancel(await select({
     message: 'Default model:',
-    choices: GROK_MODELS,
-    default: config.models.grok,
-  }]);
+    options: GROK_MODELS,
+    initialValue: config.models.grok,
+  }));
   config.models.grok = model;
   saveConfig(config);
-  console.log(`✓ Grok set to ${model}.`);
+  log.success(`Grok set to ${model}.`);
 }
 
 async function configureKimi() {
   const env = loadEnv();
   const config = loadConfig();
-  const current = env.KIMI_API_KEY;
-  console.log(`\nKimi (Moonshot) — ${current ? green('currently configured') : yellow('not configured')}`);
+  note(
+    env.KIMI_API_KEY ? `Currently configured: ${env.KIMI_API_KEY.slice(0, 8)}…` : 'Not configured yet.',
+    'Kimi (Moonshot AI)'
+  );
+  const key = orCancel(await password({ message: 'API Key (leave blank to keep existing):' }));
+  if (key) { env.KIMI_API_KEY = key; saveEnv(env); log.success('API key saved.'); }
 
-  const { key } = await inquirer.prompt([{
-    type: 'password',
-    name: 'key',
-    message: 'API Key (leave blank to keep existing):',
-    mask: '*',
-  }]);
-  if (key) { env.KIMI_API_KEY = key; saveEnv(env); console.log('✓ API key saved.'); }
-
-  const { model } = await inquirer.prompt([{
-    type: 'list',
-    name: 'model',
+  const model = orCancel(await select({
     message: 'Default model:',
-    choices: KIMI_MODELS,
-    default: config.models.kimi,
-  }]);
+    options: KIMI_MODELS,
+    initialValue: config.models.kimi,
+  }));
   config.models.kimi = model;
   saveConfig(config);
-  console.log(`✓ Kimi set to ${model}.`);
+  log.success(`Kimi set to ${model}.`);
 }
 
 async function configureOllama() {
   const config = loadConfig();
   const env = loadEnv();
-  console.log('\nOllama — no API key required');
+  note('No API key required.', 'Ollama');
 
-  // Ask for the Ollama URL (supports remote machines)
   const currentUrl = env.OLLAMA_URL_DISPLAY || env.OLLAMA_URL || 'http://localhost:11434';
-  const { ollamaUrl } = await inquirer.prompt([{
-    name: 'ollamaUrl',
+  const ollamaUrl = orCancel(await text({
     message: 'Ollama URL (local or remote):',
-    default: currentUrl,
-  }]);
+    initialValue: currentUrl,
+  }));
 
-  // Try to discover models from the specified Ollama instance
   let ollamaModels = [];
   let ollamaReachable = false;
+  const s = spinner();
+  s.start('Connecting to Ollama…');
   try {
     const res = await axios.get(`${ollamaUrl.replace(/\/$/, '')}/api/tags`, { timeout: 5000 });
     ollamaReachable = true;
-    ollamaModels = (res.data.models || []);
+    ollamaModels = res.data.models || [];
+    s.stop(`Found ${ollamaModels.length} model(s).`);
   } catch {
-    // Ollama not reachable — fall through to manual entry
+    s.stop('Could not reach Ollama — will enter model name manually.');
   }
 
   let selectedModel;
@@ -552,52 +474,92 @@ async function configureOllama() {
   if (ollamaModels.length > 0) {
     const choices = ollamaModels.map(m => {
       const sizeGB = m.size ? (m.size / 1e9).toFixed(1) + ' GB' : '';
-      const params = m.details && m.details.parameter_size ? m.details.parameter_size : '';
-      const quant  = m.details && m.details.quantization_level ? m.details.quantization_level : '';
-      const meta   = [params, quant, sizeGB].filter(Boolean).join(', ');
-      return {
-        name: `${m.name}  ${dim(meta)}`,
-        value: m.name,
-      };
+      const params = m.details?.parameter_size || '';
+      const quant  = m.details?.quantization_level || '';
+      const hint   = [params, quant, sizeGB].filter(Boolean).join(', ');
+      return { value: m.name, label: m.name, hint };
     });
-    choices.push(new inquirer.Separator());
-    choices.push({ name: 'Enter model name manually...', value: '__manual__' });
+    choices.push({ value: '__manual__', label: 'Enter model name manually…' });
 
-    const { model } = await inquirer.prompt([{
-      type: 'list',
-      name: 'model',
+    selectedModel = orCancel(await select({
       message: 'Select Ollama model:',
-      choices,
-      default: config.models.ollama,
-    }]);
-    selectedModel = model;
+      options: choices,
+      initialValue: config.models.ollama,
+    }));
   }
 
   if (!ollamaModels.length || selectedModel === '__manual__') {
-    if (!ollamaReachable) {
-      console.log(dim(`  Could not reach Ollama at ${ollamaUrl} — entering model name manually.\n`));
-    } else if (!ollamaModels.length) {
-      console.log(dim(`  Ollama is reachable but has no models pulled. Enter a model name to use once pulled (e.g. ollama pull llama3).\n`));
-    }
-    const { modelInput } = await inquirer.prompt([{
-      name: 'modelInput',
-      message: 'Model name (e.g. llama3, mistral, codellama):',
-      default: config.models.ollama,
-    }]);
-    selectedModel = modelInput;
+    if (!ollamaReachable) log.warn(`Could not reach Ollama at ${ollamaUrl}`);
+    else log.info('No models found — enter a name to use once pulled (e.g. ollama pull llama3).');
+    selectedModel = orCancel(await text({
+      message: 'Model name:',
+      initialValue: config.models.ollama,
+      placeholder: 'e.g. llama3, mistral, codellama',
+    }));
   }
 
   config.models.ollama = selectedModel;
   saveConfig(config);
 
-  // Translate localhost/127.0.0.1 → host.docker.internal so the daemon can reach it from inside Docker.
-  // Remote URLs are saved as-is.
   const daemonUrl = ollamaUrl.replace(/^(https?:\/\/)(localhost|127\.0\.0\.1)/, '$1host.docker.internal');
-  env.OLLAMA_URL_DISPLAY = ollamaUrl; // keep the human-readable URL for the CLI label
+  env.OLLAMA_URL_DISPLAY = ollamaUrl;
   env.OLLAMA_URL = daemonUrl;
   saveEnv(env);
 
-  console.log(`✓ Ollama set to ${selectedModel}.`);
+  log.success(`Ollama set to ${selectedModel}.`);
+}
+
+async function configureWebSearch() {
+  const env = loadEnv();
+
+  while (true) {
+    const activeProvider =
+      (env.BRAVE_API_KEY && env.BRAVE_API_KEY.trim())        ? 'Brave Search'
+      : (env.GOOGLE_SEARCH_API_KEY && env.GOOGLE_SEARCH_CX) ? 'Google Search'
+      : 'DuckDuckGo (fallback)';
+
+    const choice = orCancel(await select({
+      message: `Web Search  ${dim('active: ' + activeProvider)}`,
+      options: [
+        {
+          value: 'brave',
+          label: `Brave Search  ${configured(env, 'BRAVE_API_KEY') ? green('● configured') : yellow('○ not set')}`,
+          hint: '2,000 req/month free',
+        },
+        {
+          value: 'google',
+          label: `Google Search  ${(env.GOOGLE_SEARCH_API_KEY && env.GOOGLE_SEARCH_CX) ? green('● configured') : yellow('○ not set')}`,
+          hint: '100 req/day free',
+        },
+        { value: 'back', label: '← Back' },
+      ],
+    }));
+
+    if (choice === 'back') return;
+
+    if (choice === 'brave') {
+      const key = orCancel(await password({ message: 'Brave Search API key (leave blank to keep existing):' }));
+      if (key) { env.BRAVE_API_KEY = key; saveEnv(env); log.success('Brave Search key saved.'); }
+      else      { log.info('No changes made.'); }
+    }
+
+    if (choice === 'google') {
+      note(
+        'Create a Custom Search Engine at programmablesearchengine.google.com\nthen enable the Custom Search API in Google Cloud Console.',
+        'Google Search'
+      );
+      const apiKey = orCancel(await password({ message: 'Google API key (leave blank to keep existing):' }));
+      const cx     = orCancel(await text({
+        message: 'Search Engine ID (cx):',
+        initialValue: env.GOOGLE_SEARCH_CX || '',
+        placeholder: 'leave blank to keep existing',
+      }));
+      if (apiKey) env.GOOGLE_SEARCH_API_KEY = apiKey;
+      if (cx && cx !== env.GOOGLE_SEARCH_CX) env.GOOGLE_SEARCH_CX = cx;
+      if (apiKey || cx) { saveEnv(env); log.success('Google Search credentials saved.'); }
+      else              { log.info('No changes made.'); }
+    }
+  }
 }
 
 async function selectActiveModel() {
@@ -605,44 +567,36 @@ async function selectActiveModel() {
   const env = loadEnv();
 
   const label = (id, envKey) => {
-    const ok = envKey === null || !!(env[envKey] && env[envKey].trim());
-    return ok
-      ? `${id.padEnd(8)} ${green('● ' + config.models[id])}`
-      : `${id.padEnd(8)} ${yellow('○ not configured')}`;
+    const ok = envKey === null || configured(env, envKey);
+    return ok ? `${id}  ${green('● ' + config.models[id])}` : `${id}  ${yellow('○ not configured')}`;
   };
 
-  const { model } = await inquirer.prompt([{
-    type: 'list',
-    name: 'model',
+  const model = orCancel(await select({
     message: 'Active LLM provider:',
-    default: config.activeModel,
-    choices: [
-      { name: label('openai',    'OPENAI_API_KEY'),    value: 'openai'    },
-      { name: label('anthropic', 'ANTHROPIC_API_KEY'), value: 'anthropic' },
-      { name: label('gemini',    'GEMINI_API_KEY'),    value: 'gemini'    },
-      { name: label('mistral',   'MISTRAL_API_KEY'),   value: 'mistral'   },
-      { name: label('grok',      'XAI_API_KEY'),       value: 'grok'      },
-      { name: label('kimi',      'KIMI_API_KEY'),      value: 'kimi'      },
-      { name: label('ollama',    null),                value: 'ollama'    },
+    initialValue: config.activeModel,
+    options: [
+      { value: 'openai',    label: label('openai',    'OPENAI_API_KEY') },
+      { value: 'anthropic', label: label('anthropic', 'ANTHROPIC_API_KEY') },
+      { value: 'gemini',    label: label('gemini',    'GEMINI_API_KEY') },
+      { value: 'mistral',   label: label('mistral',   'MISTRAL_API_KEY') },
+      { value: 'grok',      label: label('grok',      'XAI_API_KEY') },
+      { value: 'kimi',      label: label('kimi',      'KIMI_API_KEY') },
+      { value: 'ollama',    label: label('ollama',    null) },
     ],
-  }]);
+  }));
 
   config.activeModel = model;
   saveConfig(config);
-  console.log(`✓ Active provider set to ${model} (${config.models[model]}).`);
+  log.success(`Active provider set to ${model} (${config.models[model]}).`);
 }
 
 async function editSystemPrompt() {
   const config = loadConfig();
-  const { prompt } = await inquirer.prompt([{
-    type: 'editor',
-    name: 'prompt',
-    message: 'Edit system prompt (opens $EDITOR):',
-    default: config.systemPrompt,
-  }]);
+  note('Opening $EDITOR (or nano). Save and close to apply changes.', 'System Prompt');
+  const prompt = await editWithExternalEditor(config.systemPrompt);
   config.systemPrompt = prompt.trim();
   saveConfig(config);
-  console.log('✓ System prompt updated.');
+  log.success('System prompt updated.');
 }
 
 // ─── Host command execution ───────────────────────────────────────────────────
@@ -661,131 +615,109 @@ function executeOnHost(command) {
 
 // ─── Chat ─────────────────────────────────────────────────────────────────────
 
-// Commands the user has approved for the duration of this CLI session.
 const alwaysAllowedCommands = new Set();
 
-// Recursively handle a daemon response — supports chained command proposals.
 async function handleDaemonResponse(data) {
   if (data.type === 'command_proposal') {
-    console.log(`\n  ${yellow('Proposed command')}`);
-    console.log(`  Reason : ${data.explanation}`);
-    console.log(`  Command: ${cyan(data.command)}\n`);
+    note(`Reason:  ${data.explanation}\nCommand: ${cyan(data.command)}`, 'Proposed Command');
 
-    // Auto-run if user already said "always allow" for this command this session
     if (alwaysAllowedCommands.has(data.command)) {
-      console.log(dim('  Auto-executing (always allowed this session)…'));
+      log.info('Auto-executing (always allowed this session)…');
     } else {
-      const { choice } = await inquirer.prompt([{
-        type: 'list',
-        name: 'choice',
+      const choice = orCancel(await select({
         message: 'Execute this on your machine?',
-        choices: [
-          { name: 'Yes, run it',                value: 'yes'    },
-          { name: 'Yes, always this session',   value: 'always' },
-          { name: 'No, skip',                   value: 'no'     },
+        options: [
+          { value: 'yes',    label: 'Yes, run it' },
+          { value: 'always', label: 'Yes, always this session' },
+          { value: 'no',     label: 'No, skip' },
         ],
-        default: 'no',
-      }]);
-
-      if (choice === 'no') { console.log(dim('  Command declined.\n')); return; }
+        initialValue: 'no',
+      }));
+      if (choice === 'no') { log.warn('Command declined.'); return; }
       if (choice === 'always') alwaysAllowedCommands.add(data.command);
     }
 
-    console.log(dim('  Running…'));
+    const s = spinner();
+    s.start('Running…');
     const output = await executeOnHost(data.command);
-
-    // Brief pause so services restarted by the command have time to come up.
     await new Promise(r => setTimeout(r, 2000));
+    s.stop('Done.');
 
     const followUp = await axios.post(`${DAEMON}/chat`, {
       message: `Command \`${data.command}\` finished. Output:\n\`\`\`\n${output}\n\`\`\``,
     });
     await handleDaemonResponse(followUp.data);
   } else {
-    console.log(`\nMinaClaw: ${data.response || data.error || JSON.stringify(data)}\n`);
+    const response = data.response || data.error || JSON.stringify(data);
+    note(response, 'MinaClaw');
     if (data.model || data.usage) {
-      const fmt   = n => (n || 0).toLocaleString();
-      const model = data.model  ? data.model : '';
-      const u     = data.usage  || {};
-      const tokens = (u.input !== undefined)
-        ? `↑ ${fmt(u.input)} in  ↓ ${fmt(u.output)} out`
-        : '';
-      const parts = [model, tokens].filter(Boolean);
-      if (parts.length) console.log(dim(`  ${parts.join('   ')}\n`));
+      const fmt = n => (n || 0).toLocaleString();
+      const u = data.usage || {};
+      const parts = [data.model, u.input !== undefined ? `↑ ${fmt(u.input)}  ↓ ${fmt(u.output)}` : ''].filter(Boolean);
+      if (parts.length) log.info(dim(parts.join('   ')));
     }
   }
 }
 
 async function chatSession() {
-  console.log('\n--- Chat Mode (type "exit" to return to menu) ---');
+  log.info('Chat mode — type "exit" to return to menu.');
   while (true) {
-    const { message } = await inquirer.prompt([{ name: 'message', message: '>' }]);
-    if (message.toLowerCase() === 'exit') break;
+    const message = orCancel(await text({ message: '>' }));
+    if (!message || message.toLowerCase() === 'exit') break;
 
-    // Progress indicator — dots every 3s, escalating message after 25s
-    process.stdout.write(dim('  Thinking'));
+    const s = spinner();
+    s.start('Thinking');
     let elapsed = 0;
-    const progressInterval = setInterval(() => {
+    const interval = setInterval(() => {
       elapsed += 3;
-      process.stdout.write(dim('.'));
-      if (elapsed === 27) process.stdout.write(dim(' (still working, complex task…)'));
+      if (elapsed === 27) s.message('Thinking (complex task, still working…)');
     }, 3000);
 
     try {
       const res = await axios.post(`${DAEMON}/chat`, { message });
-      clearInterval(progressInterval);
-      process.stdout.write('\n');
+      clearInterval(interval);
+      s.stop('');
       await handleDaemonResponse(res.data);
     } catch {
-      clearInterval(progressInterval);
-      process.stdout.write('\n');
-      console.error('Cannot reach daemon on localhost:6192. Is it running? Use "Daemon Management" from the menu.');
+      clearInterval(interval);
+      s.stop('');
+      log.error('Cannot reach daemon on localhost:6192. Is it running? Use Daemon Management from the menu.');
       break;
     }
   }
 }
 
-// ─── Watch mode (Telegram command executor) ───────────────────────────────────
+// ─── Watch mode ───────────────────────────────────────────────────────────────
 
 async function watchMode() {
-  console.log('\n--- Watch Mode — polling for Telegram-approved commands (Ctrl+C to stop) ---\n');
+  log.info('Watch Mode — polling for Telegram-approved commands (Ctrl+C to stop)');
 
   const poll = async () => {
     try {
       const res = await axios.get(`${DAEMON}/pending-commands`);
-      const commands = res.data;
-
-      for (const cmd of commands) {
-        console.log(`\n${yellow('▶')} Executing (chat ${cmd.chatId}): ${cyan(cmd.command)}`);
+      for (const cmd of res.data) {
+        log.info(`Executing (chat ${cmd.chatId}): ${cyan(cmd.command)}`);
         const output = await executeOnHost(cmd.command);
-        console.log(`${dim('Output:')} ${output.slice(0, 300)}${output.length > 300 ? '…' : ''}`);
-
-        await axios.post(`${DAEMON}/command-result`, {
-          chatId: cmd.chatId,
-          command: cmd.command,
-          output,
-        });
-        console.log(green('✓ Result sent to Telegram.'));
+        log.info(`${dim('Output:')} ${output.slice(0, 300)}${output.length > 300 ? '…' : ''}`);
+        await axios.post(`${DAEMON}/command-result`, { chatId: cmd.chatId, command: cmd.command, output });
+        log.success('Result sent to Telegram.');
       }
     } catch (err) {
       if (err.code !== 'ECONNREFUSED' && err.code !== 'ENOTFOUND') {
-        console.error(`[watcher] ${err.message}`);
+        log.error(`[watcher] ${err.message}`);
       }
-      // Daemon not running or transient error — will retry on next poll
     }
   };
 
-  // Poll every 3 seconds until the process is killed
   await poll();
   const interval = setInterval(poll, 3000);
 
-  // Keep the process alive; clean up on Ctrl+C
   await new Promise((resolve) => {
-    process.once('SIGINT', () => { clearInterval(interval); resolve(); });
+    process.once('SIGINT',  () => { clearInterval(interval); resolve(); });
     process.once('SIGTERM', () => { clearInterval(interval); resolve(); });
   });
 
-  console.log('\nWatch mode stopped.');
+  log.info('Watch mode stopped.');
 }
 
 // ─── Safe Folders ─────────────────────────────────────────────────────────────
@@ -799,10 +731,9 @@ async function browseForDirectory(startPath) {
       entries = fs.readdirSync(current, { withFileTypes: true })
         .filter(e => e.isDirectory())
         .sort((a, b) => {
-          // non-hidden dirs first, then alphabetical within each group
-          const aHidden = a.name.startsWith('.');
-          const bHidden = b.name.startsWith('.');
-          if (aHidden !== bHidden) return aHidden ? 1 : -1;
+          const aH = a.name.startsWith('.');
+          const bH = b.name.startsWith('.');
+          if (aH !== bH) return aH ? 1 : -1;
           return a.name.localeCompare(b.name);
         });
     } catch {
@@ -810,39 +741,31 @@ async function browseForDirectory(startPath) {
       continue;
     }
 
-    const choices = [
-      { name: green('✓  Select this directory'), value: '__select__' },
-      new inquirer.Separator(dim(`  ${current}`)),
+    const options = [
+      { value: '__select__', label: green('✓  Select this directory') },
     ];
-
     if (current !== '/') {
-      choices.push({ name: dim('↑  ..'), value: '__up__' });
+      options.push({ value: '__up__', label: '↑  ..', hint: path.dirname(current) });
     }
-
     entries.forEach(e => {
-      choices.push({
-        name: e.name.startsWith('.') ? dim(e.name + '/') : (e.name + '/'),
+      options.push({
         value: e.name,
+        label: e.name.startsWith('.') ? dim(e.name + '/') : (e.name + '/'),
       });
     });
-
     if (entries.length === 0) {
-      choices.push(new inquirer.Separator(dim('  (no subdirectories)')));
+      options.push({ value: '__nosubdirs__', label: dim('(no subdirectories)') });
     }
+    options.push({ value: '__cancel__', label: '✕  Cancel' });
 
-    choices.push(new inquirer.Separator());
-    choices.push({ name: '✕  Cancel', value: '__cancel__' });
+    const selected = orCancel(await select({
+      message: `Navigate: ${dim(current)}`,
+      options,
+    }));
 
-    const { selected } = await inquirer.prompt([{
-      type: 'list',
-      name: 'selected',
-      message: 'Navigate to directory:',
-      choices,
-      pageSize: 18,
-    }]);
-
-    if (selected === '__select__') return current;
-    if (selected === '__cancel__') return null;
+    if (selected === '__select__')   return current;
+    if (selected === '__cancel__')   return null;
+    if (selected === '__nosubdirs__') continue;
     if (selected === '__up__') { current = path.dirname(current); continue; }
 
     const next = path.join(current, selected);
@@ -850,14 +773,14 @@ async function browseForDirectory(startPath) {
       fs.accessSync(next, fs.constants.R_OK);
       current = next;
     } catch {
-      console.log(yellow(`\n  Cannot access "${selected}" — permission denied.\n`));
+      log.warn(`Cannot access "${selected}" — permission denied.`);
     }
   }
 }
 
 async function manageSafeFolders() {
   if (!fs.existsSync(COMPOSE_FILE)) {
-    console.error('docker-compose.yml not found.');
+    log.error('docker-compose.yml not found.');
     return;
   }
 
@@ -866,100 +789,80 @@ async function manageSafeFolders() {
     const volumes = doc.services.minaclaw.volumes || [];
     const safeMounts = volumes.filter(v => typeof v === 'string' && v.includes('/mnt/safe'));
 
-    const choices = [];
+    const options = safeMounts.map(mount => {
+      const [hostPath, containerPath] = mount.split(':');
+      const alias = path.basename(containerPath);
+      return { value: mount, label: `${cyan(alias.padEnd(22))} ${dim(hostPath)}` };
+    });
 
-    if (safeMounts.length > 0) {
-      safeMounts.forEach(mount => {
-        const [hostPath, containerPath] = mount.split(':');
-        const alias = path.basename(containerPath);
-        choices.push({
-          name: `${cyan(alias.padEnd(22))} ${dim(hostPath)}`,
-          value: mount,
-        });
-      });
-      choices.push(new inquirer.Separator());
-    }
+    options.push({ value: '__add__',  label: '+ Add Folder' });
+    options.push({ value: '__back__', label: '← Back' });
 
-    choices.push({ name: '+ Add Folder', value: '__add__' });
-    choices.push(new inquirer.Separator());
-    choices.push({ name: '← Back',       value: '__back__' });
-
-    const { selected } = await inquirer.prompt([{
-      type: 'list',
-      name: 'selected',
+    const selected = orCancel(await select({
       message: `Safe Folders  ${cyan(safeMounts.length + ' mount(s) active')}`,
-      choices,
-      pageSize: 20,
-    }]);
+      options,
+    }));
 
     if (selected === '__back__') return;
 
     if (selected === '__add__') {
-      console.log('');
       const hostPath = await browseForDirectory();
-      if (!hostPath) { console.log(dim('\n  Cancelled.\n')); continue; }
+      if (!hostPath) { log.info('Cancelled.'); continue; }
 
       if (volumes.some(v => typeof v === 'string' && v.startsWith(hostPath + ':'))) {
-        console.log(yellow(`\n  "${hostPath}" is already a safe folder.\n`));
+        log.warn(`"${hostPath}" is already a safe folder.`);
         continue;
       }
 
-      const { alias } = await inquirer.prompt([{
-        name: 'alias',
+      const alias = orCancel(await text({
         message: 'Mount alias (name inside /mnt/safe/):',
-        default: path.basename(hostPath),
-      }]);
+        initialValue: path.basename(hostPath),
+      }));
 
       doc.services.minaclaw.volumes = [...volumes, `${hostPath}:/mnt/safe/${alias}`];
       fs.writeFileSync(COMPOSE_FILE, yaml.dump(doc));
-      console.log(green(`\n  ✓ Added "${hostPath}" as /mnt/safe/${alias}. Restart daemon to apply.\n`));
+      log.success(`Added "${hostPath}" as /mnt/safe/${alias}. Restart daemon to apply.`);
       continue;
     }
 
-    // An existing mount was selected — show action submenu
+    // Existing mount selected — show action submenu
     const [hostPath, containerPath] = selected.split(':');
     const alias = path.basename(containerPath);
 
-    const { action } = await inquirer.prompt([{
-      type: 'list',
-      name: 'action',
+    const action = orCancel(await select({
       message: `${cyan(alias)}  ${dim(hostPath)}`,
-      choices: [
-        { name: 'Rename alias', value: 'rename' },
-        { name: red('Delete'),  value: 'delete' },
-        new inquirer.Separator(),
-        { name: '← Back',       value: 'back' },
+      options: [
+        { value: 'rename', label: 'Rename alias' },
+        { value: 'delete', label: red('Delete') },
+        { value: 'back',   label: '← Back' },
       ],
-    }]);
+    }));
 
     if (action === 'back') continue;
 
     if (action === 'delete') {
-      const { confirm } = await inquirer.prompt([{
-        type: 'confirm',
-        name: 'confirm',
+      const ok = orCancel(await confirm({
         message: `Remove "${alias}" (${hostPath})?`,
-        default: false,
-      }]);
-      if (confirm) {
+        initialValue: false,
+      }));
+      if (ok) {
         doc.services.minaclaw.volumes = volumes.filter(v => v !== selected);
         fs.writeFileSync(COMPOSE_FILE, yaml.dump(doc));
-        console.log(green('\n  ✓ Removed. Restart daemon to apply.\n'));
+        log.success('Removed. Restart daemon to apply.');
       } else {
-        console.log(dim('\n  Cancelled.\n'));
+        log.info('Cancelled.');
       }
     }
 
     if (action === 'rename') {
-      const { newAlias } = await inquirer.prompt([{
-        name: 'newAlias',
+      const newAlias = orCancel(await text({
         message: 'New alias name:',
-        default: alias,
-      }]);
+        initialValue: alias,
+      }));
       const newMount = `${hostPath}:/mnt/safe/${newAlias}`;
       doc.services.minaclaw.volumes = volumes.map(v => v === selected ? newMount : v);
       fs.writeFileSync(COMPOSE_FILE, yaml.dump(doc));
-      console.log(green(`\n  ✓ Renamed to "${newAlias}". Restart daemon to apply.\n`));
+      log.success(`Renamed to "${newAlias}". Restart daemon to apply.`);
     }
   }
 }
@@ -996,13 +899,12 @@ WantedBy=default.target
   const dir = path.dirname(SERVICE_PATH);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(SERVICE_PATH, unit);
-
   try {
     execSync('systemctl --user daemon-reload', { stdio: 'pipe' });
     execSync(`systemctl --user enable --now ${SERVICE_NAME}`, { stdio: 'pipe' });
     return true;
   } catch (e) {
-    console.log(red('\n  Failed to enable service: ' + e.message));
+    log.error('Failed to enable service: ' + e.message);
     return false;
   }
 }
@@ -1014,20 +916,19 @@ async function uninstallWatcherService() {
     execSync('systemctl --user daemon-reload', { stdio: 'pipe' });
     return true;
   } catch (e) {
-    console.log(red('\n  Failed to remove service: ' + e.message));
+    log.error('Failed to remove service: ' + e.message);
     return false;
   }
 }
 
-// ─── Daemon Management ───────────────────────────────────────────────────────
+// ─── Daemon Management ────────────────────────────────────────────────────────
 
 function runDockerCommand(description, command) {
   return new Promise((resolve) => {
-    process.stdout.write(`  ${description}...`);
+    process.stdout.write(`  ${description}…`);
     exec(command, { cwd: PROJECT_ROOT, timeout: 300000 }, (error, stdout, stderr) => {
       if (error) {
         console.log(` ${yellow('failed')}`);
-        // Extract meaningful error lines, filtering Docker WARNING noise
         const lines = (stderr || error.message || '').split('\n')
           .filter(l => !l.startsWith('WARNING') && l.trim())
           .slice(-5);
@@ -1056,144 +957,116 @@ async function daemonMenu() {
   while (true) {
     const { running, status } = await getDaemonStatus();
     const watcherStatus = getWatcherStatus();
-    const daemonBadge  = running ? green(`● Running (${status})`) : yellow('○ Stopped');
-    const watcherBadge = watcherStatus === 'running' ? green('● running') : yellow('○ ' + watcherStatus);
 
-    const { choice } = await inquirer.prompt([{
-      type: 'list',
-      name: 'choice',
-      message: `Daemon Management  ${daemonBadge}`,
-      choices: [
-        { name: 'Start Daemon',   value: 'start' },
-        { name: 'Stop Daemon',    value: 'stop' },
-        { name: 'Restart Daemon', value: 'restart' },
-        { name: 'Daemon Status',  value: 'status' },
-        { name: 'View Logs',      value: 'logs' },
-        new inquirer.Separator(),
+    const choice = orCancel(await select({
+      message: `Daemon Management  ${running ? green(`● Running (${status})`) : yellow('○ Stopped')}`,
+      options: [
+        { value: 'start',   label: 'Start Daemon' },
+        { value: 'stop',    label: 'Stop Daemon' },
+        { value: 'restart', label: 'Restart Daemon' },
+        { value: 'status',  label: 'Status' },
+        { value: 'logs',    label: 'View Logs' },
         {
-          name: `Host Watcher Service  ${watcherBadge}`,
           value: 'watcher',
+          label: 'Host Watcher Service',
+          hint: watcherStatus === 'running' ? '● running' : '○ ' + watcherStatus,
         },
-        new inquirer.Separator(),
-        { name: '← Back',         value: 'back' },
+        { value: 'back',    label: '← Back' },
       ],
-    }]);
+    }));
 
     if (choice === 'back') return;
 
     switch (choice) {
       case 'start': {
-        console.log('');
         const built = await runDockerCommand('Building image', 'docker compose build --quiet');
-        if (built) {
-          await runDockerCommand('Starting container', 'docker compose up -d');
-        }
-        console.log('');
+        if (built) await runDockerCommand('Starting container', 'docker compose up -d');
         break;
       }
       case 'stop': {
-        console.log('');
         await runDockerCommand('Stopping daemon', 'docker compose down');
-        console.log('');
         break;
       }
       case 'restart': {
-        console.log('');
         await runDockerCommand('Stopping daemon', 'docker compose down');
         const built = await runDockerCommand('Building image', 'docker compose build --quiet');
-        if (built) {
-          await runDockerCommand('Starting container', 'docker compose up -d');
-        }
-        console.log('');
+        if (built) await runDockerCommand('Starting container', 'docker compose up -d');
         break;
       }
       case 'status': {
-        console.log('');
         const st = await getDaemonStatus();
         if (st.running) {
-          console.log(`  Container: ${green('● Running')}  ${dim(st.status)}`);
+          log.info(`Container: ${green('● Running')}  ${dim(st.status)}`);
           try {
             const res = await axios.get(`${DAEMON}/health`, { timeout: 3000 });
-            console.log(`  Health:    ${green('● ' + res.data.status)}`);
+            log.success(`Health:    ${res.data.status}`);
           } catch {
-            console.log(`  Health:    ${yellow('○ unreachable')}`);
+            log.warn('Health: unreachable');
           }
         } else {
-          console.log(`  Container: ${yellow('○ Stopped')}`);
+          log.warn('Container: stopped');
         }
-        console.log('');
         break;
       }
       case 'logs': {
-        console.log(dim('\n  Streaming logs (Ctrl+C to stop)...\n'));
+        log.info('Streaming logs (Ctrl+C to stop)…');
         try {
           const child = spawn('docker', ['compose', 'logs', '--tail', '30', '-f'], {
-            cwd: PROJECT_ROOT,
-            stdio: 'inherit',
+            cwd: PROJECT_ROOT, stdio: 'inherit',
           });
-          await new Promise((resolve) => {
-            child.on('close', resolve);
-            child.on('error', resolve);
-          });
+          await new Promise((resolve) => { child.on('close', resolve); child.on('error', resolve); });
         } catch { /* user exited */ }
-        console.log('');
         break;
       }
       case 'watcher': {
-        const ws = getWatcherStatus();
-        const installed = fs.existsSync(SERVICE_PATH);
-        console.log('');
-        console.log(`  Host Watcher Service — ${ws === 'running' ? green('● running') : yellow('○ ' + ws)}`);
-        console.log(dim('  Executes Telegram-approved commands on your machine automatically.\n'));
-
-        const watcherChoices = installed
-          ? [
-              { name: ws === 'running' ? 'Stop service'    : 'Start service',  value: 'toggle' },
-              { name: 'Restart service',                                         value: 'restart' },
-              { name: red('Uninstall service'),                                  value: 'uninstall' },
-              new inquirer.Separator(),
-              { name: '← Back',                                                  value: 'back' },
-            ]
-          : [
-              { name: green('Install & start automatically on boot'),            value: 'install' },
-              new inquirer.Separator(),
-              { name: '← Back',                                                  value: 'back' },
-            ];
-
-        const { watcherAction } = await inquirer.prompt([{
-          type: 'list',
-          name: 'watcherAction',
-          message: 'Host Watcher Service:',
-          choices: watcherChoices,
-        }]);
-
-        if (watcherAction === 'install') {
-          process.stdout.write('  Installing service...');
-          const ok = await installWatcherService();
-          console.log(ok ? ` ${green('done')}` : '');
-          if (ok) console.log(green('  ✓ Watcher is now running and will start automatically on boot.\n'));
-        } else if (watcherAction === 'toggle') {
-          const cmd = ws === 'running' ? 'stop' : 'start';
-          execSync(`systemctl --user ${cmd} ${SERVICE_NAME}`, { stdio: 'pipe' });
-          console.log(green(`  ✓ Service ${cmd}ped.\n`));
-        } else if (watcherAction === 'restart') {
-          execSync(`systemctl --user restart ${SERVICE_NAME}`, { stdio: 'pipe' });
-          console.log(green('  ✓ Service restarted.\n'));
-        } else if (watcherAction === 'uninstall') {
-          const { confirm } = await inquirer.prompt([{
-            type: 'confirm',
-            name: 'confirm',
-            message: 'Uninstall the watcher service?',
-            default: false,
-          }]);
-          if (confirm) {
-            await uninstallWatcherService();
-            console.log(green('  ✓ Service removed.\n'));
-          }
-        }
+        await watcherMenu();
         break;
       }
     }
+  }
+}
+
+async function watcherMenu() {
+  const ws = getWatcherStatus();
+  const installed = fs.existsSync(SERVICE_PATH);
+
+  note(
+    `Status: ${ws === 'running' ? green('● running') : yellow('○ ' + ws)}\nExecutes Telegram-approved commands on your machine automatically.`,
+    'Host Watcher Service'
+  );
+
+  const options = installed
+    ? [
+        { value: 'toggle',    label: ws === 'running' ? 'Stop service' : 'Start service' },
+        { value: 'restart',   label: 'Restart service' },
+        { value: 'uninstall', label: red('Uninstall service') },
+        { value: 'back',      label: '← Back' },
+      ]
+    : [
+        { value: 'install', label: green('Install & start automatically on boot') },
+        { value: 'back',    label: '← Back' },
+      ];
+
+  const action = orCancel(await select({ message: 'Host Watcher Service:', options }));
+
+  if (action === 'back') return;
+
+  if (action === 'install') {
+    const s = spinner();
+    s.start('Installing service…');
+    const ok = await installWatcherService();
+    s.stop(ok ? 'Installed.' : 'Installation failed.');
+    if (ok) log.success('Watcher is now running and will start automatically on boot.');
+  } else if (action === 'toggle') {
+    const cmd = ws === 'running' ? 'stop' : 'start';
+    execSync(`systemctl --user ${cmd} ${SERVICE_NAME}`, { stdio: 'pipe' });
+    log.success(`Service ${cmd}ped.`);
+  } else if (action === 'restart') {
+    execSync(`systemctl --user restart ${SERVICE_NAME}`, { stdio: 'pipe' });
+    log.success('Service restarted.');
+  } else if (action === 'uninstall') {
+    const ok = orCancel(await confirm({ message: 'Uninstall the watcher service?', initialValue: false }));
+    if (ok) { await uninstallWatcherService(); log.success('Service removed.'); }
   }
 }
 
@@ -1201,89 +1074,69 @@ async function daemonMenu() {
 
 async function sessionMenu() {
   while (true) {
-    const { choice } = await inquirer.prompt([{
-      type: 'list',
-      name: 'choice',
+    const choice = orCancel(await select({
       message: 'Session & Memory',
-      choices: [
-        { name: 'View Session Info',    value: 'info' },
-        { name: 'Clear Chat Session',   value: 'clear' },
-        new inquirer.Separator(),
-        { name: 'View identity.md',     value: 'view_identity' },
-        { name: 'View memory.md',       value: 'view_memory' },
-        { name: 'Clear identity.md',    value: 'clear_identity' },
-        { name: 'Clear memory.md',      value: 'clear_memory' },
-        new inquirer.Separator(),
-        { name: '← Back',               value: 'back' },
+      options: [
+        { value: 'info',           label: 'View Session Info' },
+        { value: 'clear',          label: 'Clear Chat Session' },
+        { value: 'view_identity',  label: 'View identity.md' },
+        { value: 'view_memory',    label: 'View memory.md' },
+        { value: 'clear_identity', label: 'Clear identity.md' },
+        { value: 'clear_memory',   label: 'Clear memory.md' },
+        { value: 'back',           label: '← Back' },
       ],
-    }]);
+    }));
 
     if (choice === 'back') return;
 
     switch (choice) {
       case 'info': {
         const config = loadConfig();
-        const env = loadEnv();
-        console.log('');
-        console.log(`  Provider:       ${cyan(config.activeModel)}`);
-        console.log(`  Model:          ${config.models[config.activeModel]}`);
-        console.log(`  Prompt version: ${config.promptVersion || 'unknown'}`);
+        const lines = [
+          `Provider:       ${cyan(config.activeModel)}`,
+          `Model:          ${config.models[config.activeModel]}`,
+          `Prompt version: ${config.promptVersion || 'unknown'}`,
+        ];
         try {
           await axios.get(`${DAEMON}/health`, { timeout: 3000 });
-          console.log(`  Daemon:         ${green('● reachable')}`);
+          lines.push(`Daemon:         ${green('● reachable')}`);
         } catch {
-          console.log(`  Daemon:         ${yellow('○ unreachable')}`);
+          lines.push(`Daemon:         ${yellow('○ unreachable')}`);
         }
-        console.log('');
+        note(lines.join('\n'), 'Session Info');
         break;
       }
       case 'clear': {
         try {
           await axios.post(`${DAEMON}/session/clear`, { sessionId: 'cli' });
-          console.log('✓ Chat session cleared.');
+          log.success('Chat session cleared.');
         } catch {
-          console.log(yellow('Could not reach daemon — is it running?'));
+          log.warn('Could not reach daemon — is it running?');
         }
         break;
       }
       case 'view_identity': {
         const filePath = path.join(SKILLS_DIR, 'identity.md');
-        if (fs.existsSync(filePath)) {
-          console.log(`\n${dim('─── identity.md ───')}`);
-          console.log(fs.readFileSync(filePath, 'utf8'));
-          console.log(dim('───────────────────\n'));
-        } else {
-          console.log(dim('  identity.md not found.\n'));
-        }
+        if (fs.existsSync(filePath)) note(fs.readFileSync(filePath, 'utf8'), 'identity.md');
+        else log.info('identity.md not found.');
         break;
       }
       case 'view_memory': {
         const filePath = path.join(SKILLS_DIR, 'memory.md');
-        if (fs.existsSync(filePath)) {
-          console.log(`\n${dim('─── memory.md ───')}`);
-          console.log(fs.readFileSync(filePath, 'utf8'));
-          console.log(dim('─────────────────\n'));
-        } else {
-          console.log(dim('  memory.md not found.\n'));
-        }
+        if (fs.existsSync(filePath)) note(fs.readFileSync(filePath, 'utf8'), 'memory.md');
+        else log.info('memory.md not found.');
         break;
       }
       case 'clear_identity':
       case 'clear_memory': {
         const filename = choice === 'clear_identity' ? 'identity.md' : 'memory.md';
         const filePath = path.join(SKILLS_DIR, filename);
-        const { confirm } = await inquirer.prompt([{
-          type: 'confirm',
-          name: 'confirm',
+        const ok = orCancel(await confirm({
           message: `Clear ${filename}? This cannot be undone.`,
-          default: false,
-        }]);
-        if (confirm) {
-          fs.writeFileSync(filePath, '');
-          console.log(`✓ ${filename} cleared.`);
-        } else {
-          console.log('Cancelled.');
-        }
+          initialValue: false,
+        }));
+        if (ok) { fs.writeFileSync(filePath, ''); log.success(`${filename} cleared.`); }
+        else    { log.info('Cancelled.'); }
         break;
       }
     }
@@ -1295,18 +1148,22 @@ async function sessionMenu() {
 function showAbout() {
   const pkg = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf8'));
   const config = loadConfig();
-
-  console.log('');
-  console.log(`  ${bold('MinaClaw')} v${pkg.version}`);
-  console.log(`  Your personal AI agent — always on, always ready.`);
-  console.log('');
-  console.log(`  Provider:       ${cyan(config.activeModel)} ${dim('(' + config.models[config.activeModel] + ')')}`);
-  console.log(`  Prompt version: ${config.promptVersion || 'unknown'}`);
-  console.log(`  Daemon URL:     ${dim(DAEMON)}`);
-  console.log(`  Config dir:     ${dim(CONFIG_DIR)}`);
-  console.log(`  Skills dir:     ${dim(SKILLS_DIR)}`);
-  console.log('');
+  note(
+    [
+      `${bold('MinaClaw')} v${pkg.version}`,
+      `Your personal AI agent — always on, always ready.`,
+      '',
+      `Provider:       ${cyan(config.activeModel)}  ${dim('(' + config.models[config.activeModel] + ')')}`,
+      `Prompt version: ${config.promptVersion || 'unknown'}`,
+      `Daemon URL:     ${dim(DAEMON)}`,
+      `Config dir:     ${dim(CONFIG_DIR)}`,
+      `Skills dir:     ${dim(SKILLS_DIR)}`,
+    ].join('\n'),
+    'About'
+  );
 }
+
+// ─── Entry point ──────────────────────────────────────────────────────────────
 
 if (process.argv[2] !== 'watch') {
   mainMenu().catch(console.error);

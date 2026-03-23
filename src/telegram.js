@@ -370,9 +370,6 @@ function startTelegramBot() {
       return ctx.reply('⚠️ Could not understand the voice note. Please try again.');
     }
 
-    // Echo the transcription so the user can see what was heard
-    await ctx.reply(`🎤 ${transcribedText}`).catch(() => {});
-
     await processMessage(ctx, transcribedText, sessionId);
   });
 
