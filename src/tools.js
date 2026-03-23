@@ -23,12 +23,12 @@ function resolvePath(filePath) {
   return path.resolve(filePath);
 }
 
-async function executeShellCommand(command) {
+async function executeShellCommand(command, signal) {
   return new Promise((resolve) => {
     if (command.includes('rm -rf /') || command.includes('mkfs')) {
       return resolve('Command blocked due to security policies.');
     }
-    exec(command, { timeout: 10000 }, (error, stdout, stderr) => {
+    const child = exec(command, { timeout: 10000 }, (error, stdout, stderr) => {
       let output = '';
       if (stdout) output += `STDOUT:\n${stdout}\n`;
       if (stderr) output += `STDERR:\n${stderr}\n`;
@@ -40,6 +40,12 @@ async function executeShellCommand(command) {
       }
       resolve(output.trim() || 'Command executed silently (no output).');
     });
+    if (signal) {
+      signal.addEventListener('abort', () => {
+        child.kill('SIGTERM');
+        resolve('Command killed — agent stopped by user.');
+      }, { once: true });
+    }
   });
 }
 

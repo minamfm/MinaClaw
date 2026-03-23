@@ -58,10 +58,11 @@ function startTelegramBot() {
     if (prev) {
       prev.abort();
       activeRequests.delete(sessionId);
-      console.log(`[kill] session=${sessionId} — agent killed by user`);
-      return ctx.reply('🛑 Agent stopped.');
     }
-    return ctx.reply('No active task running.');
+    session.clearThinking(sessionId);
+    session.append(sessionId, 'user', '[User stopped the agent with /kill. The previous task has been cancelled. Wait for new instructions.]');
+    console.log(`[kill] session=${sessionId} — killed by user`);
+    return ctx.reply('🛑 Stopped.');
   });
 
   bot.command('sh', async (ctx) => {
@@ -268,7 +269,7 @@ function startTelegramBot() {
     }
 
     try {
-      const { text: llmText, usage, parsed, newMessages, hitLimit, aborted } = await queryLLMLoop(messages, { onProgress: null, onChunk, onThinking, signal, sessionId });
+      const { text: llmText, usage, parsed, newMessages, hitLimit, aborted } = await queryLLMLoop(messages, { onProgress, onChunk, onThinking, signal, sessionId });
       clearInterval(typingInterval);
       clearTimeout(workingTimer);
       activeRequests.delete(sessionId);

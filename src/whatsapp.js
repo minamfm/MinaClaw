@@ -176,11 +176,12 @@ async function handleMessage(msg) {
     if (prev) {
       prev.abort();
       activeRequests.delete(jid);
-      console.log(`[kill] jid=${jid} — agent killed by user`);
-      await sendToJid(jid, '🛑 Agent stopped.');
-    } else {
-      await sendToJid(jid, 'No active task running.');
     }
+    const sessionId = 'wa:' + jid;
+    session.clearThinking(sessionId);
+    session.append(sessionId, 'user', '[User stopped the agent with /kill. The previous task has been cancelled. Wait for new instructions.]');
+    console.log(`[kill] jid=${jid} — killed by user`);
+    await sendToJid(jid, '🛑 Stopped.');
     return;
   }
 

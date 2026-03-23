@@ -723,7 +723,7 @@ async function queryLLMLoop(messages, { onProgress, onChunk, onThinking, signal,
     let output;
     if (parsed.type === 'internal_exec') {
       console.log(`[internal_exec] ${parsed.command}`);
-      output = await executeShellCommand(parsed.command);
+      output = await executeShellCommand(parsed.command, signal);
     } else if (parsed.type === 'fetch_url') {
       console.log(`[fetch_url] ${parsed.method || 'GET'} ${parsed.url}`);
       output = await fetchUrl(parsed.url, parsed.method, parsed.headers, parsed.body);
@@ -733,6 +733,12 @@ async function queryLLMLoop(messages, { onProgress, onChunk, onThinking, signal,
     } else if (parsed.type === 'update_config') {
       console.log(`[update_config] target=${parsed.target} key=${parsed.key}`);
       output = updateAgentConfig(parsed.target, parsed.key, parsed.value);
+    }
+
+    // Check abort immediately after tool execution — don't wait for next iteration
+    if (signal?.aborted) {
+      if (sessionId) session.clearThinking(sessionId);
+      return { text: '', usage: totalUsage, model: lastModel, parsed: { type: 'text', response: '' }, newMessages, aborted: true };
     }
 
     const label = parsed.type === 'internal_exec' ? `\`${parsed.command}\``
