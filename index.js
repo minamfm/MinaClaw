@@ -5,8 +5,9 @@ const { startTelegramBot }                     = require('./src/telegram');
 const { startWhatsAppBot, getStatus: getWAStatus, getQR, sendToJid } = require('./src/whatsapp');
 const { queryLLM, queryLLMLoop, parseResponse } = require('./src/llm');
 const { loadConfig, updateConfig }             = require('./src/config');
-const queue   = require('./src/command-queue');
-const session = require('./src/session');
+const queue     = require('./src/command-queue');
+const session   = require('./src/session');
+const scheduler = require('./src/scheduler');
 
 console.log('Starting MinaClaw daemon…');
 
@@ -159,6 +160,26 @@ app.get('/whatsapp/numbers', (req, res) => {
   res.json({ numbers: cfg.whatsappAllowedNumbers || [] });
 });
 
+// ─── Scheduler API ────────────────────────────────────────────────────────────
+
+app.post('/schedule/add', (req, res) => {
+  const { delaySeconds, command, label } = req.body;
+  if (!command || delaySeconds == null)
+    return res.status(400).json({ error: 'command and delaySeconds required' });
+  const id = scheduler.addOneTimeJob({ delayMs: delaySeconds * 1000, command, label });
+  res.json({ id });
+});
+
+app.get('/schedule/list', (req, res) => {
+  res.json(scheduler.listJobs());
+});
+
+app.delete('/schedule/:id', (req, res) => {
+  const ok = scheduler.cancelJob(req.params.id);
+  if (!ok) return res.status(404).json({ error: 'job not found' });
+  res.json({ ok: true });
+});
+
 app.post('/whatsapp/send', async (req, res) => {
   const { jid, message } = req.body;
   if (!jid || !message) return res.status(400).json({ error: 'jid and message required' });
@@ -174,6 +195,9 @@ const bot = startTelegramBot();
 
 // Start WhatsApp bot (non-fatal — logs error if it fails)
 startWhatsAppBot().catch(err => console.error('[WhatsApp] Startup error:', err.message));
+
+// Restore persistent scheduled jobs (runs any that fired while container was down)
+scheduler.restoreJobs();
 
 if (!bot) {
   console.log('Running in headless mode (no Telegram bot).');

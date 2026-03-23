@@ -319,7 +319,7 @@ async function processMessage(jid, text) {
 
   // Reminder scheduling — handle before LLM so the reminder fires back to WhatsApp
   if (text.toLowerCase().includes('remind me')) {
-    const scheduled = await handleScheduling(text, msg => sendToJid(jid, msg));
+    const scheduled = await handleScheduling(text, msg => sendToJid(jid, msg), 'wa:' + jid);
     if (scheduled) return;
   }
 
