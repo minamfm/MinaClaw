@@ -670,10 +670,11 @@ async function queryLLMLoop(messages, { onProgress, onChunk, onThinking, signal,
       return { text: '', usage: totalUsage, model: lastModel, parsed: { type: 'text', response: '' }, newMessages, aborted: true };
     }
 
-    // If the LLM itself errored mid-loop, surface what was completed so far
-    if (result.error && i > 0) {
-      const done = steps.map((s, j) => `${j + 1}. ${s.label}`).join('\n');
-      const text = `I hit an error after ${i} step${i > 1 ? 's' : ''} and couldn't finish.\n\n${result.text}\n\nCompleted so far:\n${done}`;
+    // If the LLM itself errored, surface it regardless of which step we're on
+    if (result.error) {
+      const text = i === 0
+        ? `Sorry, I couldn't reach the AI model. ${result.text || 'Please try again.'}`
+        : `I hit an error after ${i} step${i > 1 ? 's' : ''} and couldn't finish.\n\n${result.text}\n\nCompleted so far:\n${steps.map((s, j) => `${j + 1}. ${s.label}`).join('\n')}`;
       newMessages.push({ role: 'assistant', content: text });
       if (sessionId) session.clearThinking(sessionId);
       return { text, usage: totalUsage, model: lastModel, parsed: { type: 'text', response: text }, newMessages };

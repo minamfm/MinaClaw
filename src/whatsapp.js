@@ -179,7 +179,7 @@ async function handleMessage(msg) {
     }
     const sessionId = 'wa:' + jid;
     session.clearThinking(sessionId);
-    session.append(sessionId, 'user', '[User stopped the agent with /kill. The previous task has been cancelled. Wait for new instructions.]');
+    session.append(sessionId, 'assistant', '[Task cancelled by user via /kill.]');
     console.log(`[kill] jid=${jid} — killed by user`);
     await sendToJid(jid, '🛑 Stopped.');
     return;

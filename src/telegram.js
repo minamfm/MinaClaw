@@ -60,7 +60,7 @@ function startTelegramBot() {
       activeRequests.delete(sessionId);
     }
     session.clearThinking(sessionId);
-    session.append(sessionId, 'user', '[User stopped the agent with /kill. The previous task has been cancelled. Wait for new instructions.]');
+    session.append(sessionId, 'assistant', '[Task cancelled by user via /kill.]');
     console.log(`[kill] session=${sessionId} — killed by user`);
     return ctx.reply('🛑 Stopped.');
   });
