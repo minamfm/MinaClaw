@@ -117,6 +117,7 @@
     <button data-tab="scheduler">Scheduler</button>
     <button data-tab="sessions">Sessions</button>
     <button data-tab="logs">Logs</button>
+    <button data-tab="usage">Usage</button>
   </nav>
 </header>
 
@@ -224,6 +225,13 @@
       </label>
     </div>
     <pre id="log-output">Loading…</pre>
+  </div>
+  <!-- ── Usage ── -->
+  <div id="usage" class="panel">
+    <div class="card">
+      <h3>Token Usage — Last 24 Hours <button class="btn sec sm" onclick="loadUsageStats()" style="margin-left:6px;">↻</button></h3>
+      <div id="usage-stats"><span class="spin"></span></div>
+    </div>
   </div>
 </main>
 
@@ -553,6 +561,47 @@ TAB_LOADERS.logs = () => {
     if (document.getElementById('log-auto').checked) loadLogs();
   }, 5000);
 };
+
+// ── Usage ─────────────────────────────────────────────────────────────────────
+
+async function loadUsageStats() {
+  const el = document.getElementById('usage-stats');
+  el.innerHTML = '<span class="spin"></span>';
+  try {
+    const data = await api('GET', '/usage');
+    if (!data.length) {
+      el.innerHTML = '<p style="color:var(--muted);font-size:13px;padding:6px 0;">No usage data recorded in the last 24 hours.</p>';
+      return;
+    }
+    const totalIn  = data.reduce((s, r) => s + r.input, 0);
+    const totalOut = data.reduce((s, r) => s + r.output, 0);
+    const totalReq = data.reduce((s, r) => s + r.requests, 0);
+    el.innerHTML = `
+      <table>
+        <thead><tr><th>Provider</th><th>Model</th><th>Input Tokens</th><th>Output Tokens</th><th>Total</th><th>Requests</th></tr></thead>
+        <tbody>
+          ${data.map(r => `<tr>
+            <td>${esc(r.provider)}</td>
+            <td style="font-family:monospace;font-size:12px;">${esc(r.model)}</td>
+            <td>${r.input.toLocaleString()}</td>
+            <td>${r.output.toLocaleString()}</td>
+            <td>${(r.input + r.output).toLocaleString()}</td>
+            <td>${r.requests}</td>
+          </tr>`).join('')}
+          <tr style="font-weight:600;border-top:2px solid var(--border);">
+            <td colspan="2" style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px;">Total</td>
+            <td>${totalIn.toLocaleString()}</td>
+            <td>${totalOut.toLocaleString()}</td>
+            <td>${(totalIn + totalOut).toLocaleString()}</td>
+            <td>${totalReq}</td>
+          </tr>
+        </tbody>
+      </table>`;
+  } catch (e) {
+    el.textContent = 'Error: ' + e.message;
+  }
+}
+TAB_LOADERS.usage = loadUsageStats;
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 

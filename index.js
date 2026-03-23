@@ -11,6 +11,7 @@ const { loadConfig, updateConfig }             = require('./src/config');
 const { updateAgentConfig }                    = require('./src/tools');
 const queue     = require('./src/command-queue');
 const session   = require('./src/session');
+const usageLog  = require('./src/usage');
 const scheduler = require('./src/scheduler');
 
 console.log('Starting MinaClaw daemon…');
@@ -29,7 +30,10 @@ app.post('/chat', async (req, res) => {
     session.append(sessionId, 'user', message);
     const { text, usage, model, parsed, newMessages } = await queryLLMLoop(session.get(sessionId), { sessionId });
     for (const msg of newMessages) session.append(sessionId, msg.role, msg.content);
-    if (usage) session.addUsage(sessionId, usage.input, usage.output);
+    if (usage) {
+      session.addUsage(sessionId, usage.input, usage.output);
+      usageLog.record(loadConfig().activeModel, model, usage.input, usage.output);
+    }
 
     if (parsed.type === 'send_telegram') {
       const cfg = loadConfig();
@@ -62,9 +66,12 @@ app.post('/command-result', async (req, res) => {
     `Command \`${command}\` was executed on my machine. Output:\n\`\`\`\n${output}\n\`\`\``);
 
   try {
-    const { text, usage, parsed, newMessages } = await queryLLMLoop(session.get(sessionId), { sessionId });
+    const { text, usage, model: cmdModel, parsed, newMessages } = await queryLLMLoop(session.get(sessionId), { sessionId });
     for (const msg of newMessages) session.append(sessionId, msg.role, msg.content);
-    if (usage) session.addUsage(sessionId, usage.input, usage.output);
+    if (usage) {
+      session.addUsage(sessionId, usage.input, usage.output);
+      usageLog.record(loadConfig().activeModel, cmdModel, usage.input, usage.output);
+    }
 
     // Route result to WhatsApp if chatId is a JID, otherwise Telegram
     const isWhatsApp = typeof chatId === 'string' && chatId.includes('@');
@@ -253,6 +260,12 @@ app.get('/logs', (req, res) => {
   } catch {
     res.type('text/plain').send('Log file not found.');
   }
+});
+
+// ─── Usage API ────────────────────────────────────────────────────────────────
+
+app.get('/usage', (req, res) => {
+  res.json(usageLog.getLast24h());
 });
 
 // ─── Servers ──────────────────────────────────────────────────────────────────
