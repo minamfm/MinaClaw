@@ -20,6 +20,22 @@ MinaClaw is a self-hosted AI agent daemon that runs 24/7 in Docker. Talk to it o
 
 ---
 
+## Screenshots
+
+<div align="center">
+
+| Long-term memory | Model switching | Command approval | Skill learning |
+|:---:|:---:|:---:|:---:|
+| ![Memory](docs/screenshots/tg_memory.png) | ![Model switch](docs/screenshots/tg_model_switch.png) | ![Approval](docs/screenshots/tg_approval.png) | ![Learn](docs/screenshots/tg_learn.png) |
+
+| WhatsApp — context-aware chat | WhatsApp — voice + scheduling |
+|:---:|:---:|
+| ![WhatsApp chat](docs/screenshots/wa_chat.png) | ![WhatsApp voice](docs/screenshots/wa_voice.png) |
+
+</div>
+
+---
+
 ## What makes it different
 
 | Feature | MinaClaw |
