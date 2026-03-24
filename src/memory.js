@@ -30,9 +30,26 @@ function readFile(filePath) {
 }
 
 /**
+ * Extracts a one-line description from a skill file.
+ * Looks for (in order):
+ *   1. A blockquote line starting with "> " (explicit description convention)
+ *   2. The first non-empty line that is not a markdown heading
+ * Falls back to the skill name formatted as words.
+ */
+function extractSkillDescription(content, skillName) {
+  const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
+  const blockquote = lines.find(l => l.startsWith('> '));
+  if (blockquote) return blockquote.slice(2).trim();
+  const firstBody = lines.find(l => !l.startsWith('#'));
+  if (firstBody) return firstBody.slice(0, 120);
+  return skillName.replace(/_/g, ' ');
+}
+
+/**
  * Returns a formatted block ready to inject into the system prompt.
  * identity.md and memory.md are scoped per-contact for WA sessions.
- * Skills are always loaded from the shared skills/ root.
+ * Skills are represented as an index (name + 1-line description only).
+ * Use read_skill("name") to load a skill's full content at runtime.
  */
 function loadMemoryContext(sessionId) {
   const dir = contactDir(sessionId);
@@ -45,22 +62,28 @@ function loadMemoryContext(sessionId) {
     ? readFile(path.join(dir, 'memory.md'))
     : readFile(MEMORY_PATH);
 
-  // Skills are always global/shared
-  let skills = [];
+  // Build skill index — name + 1-line description only (no full content)
+  let skillIndex = [];
   try {
-    skills = fs.readdirSync(SKILLS_DIR)
+    skillIndex = fs.readdirSync(SKILLS_DIR)
       .filter(f => f.endsWith('_skill.md'))
       .sort()
-      .map(f => readFile(path.join(SKILLS_DIR, f)))
-      .filter(Boolean);
+      .map(f => {
+        const name = f.replace('_skill.md', '');
+        const content = readFile(path.join(SKILLS_DIR, f));
+        const desc = content ? extractSkillDescription(content, name) : name.replace(/_/g, ' ');
+        return `- ${name}: ${desc}`;
+      });
   } catch { /* skills dir missing */ }
 
-  if (!identity && !memory && !skills.length) return '';
+  if (!identity && !memory && !skillIndex.length) return '';
 
   const parts = [];
-  if (identity)      parts.push(`## Identity & User Context\n${identity}`);
-  if (memory)        parts.push(`## Your Notes\n${memory}`);
-  if (skills.length) parts.push(`## Skills\n\n${skills.join('\n\n---\n\n')}`);
+  if (identity)          parts.push(`## Identity & User Context\n${identity}`);
+  if (memory)            parts.push(`## Your Notes\n${memory}`);
+  if (skillIndex.length) parts.push(
+    `## Available Skills\n${skillIndex.join('\n')}\n\nCall read_skill("name") to load a skill's full content before using it.`
+  );
 
   return parts.join('\n\n');
 }

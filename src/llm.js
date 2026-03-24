@@ -4,7 +4,7 @@ const { GoogleGenAI } = require('@google/genai');
 const axios = require('axios');
 const { loadConfig } = require('./config');
 const { loadMemoryContext, extractMemoryTags, appendMemory, replaceIdentity } = require('./memory');
-const { executeShellCommand, updateAgentConfig } = require('./tools');
+const { executeShellCommand, updateAgentConfig, readSkillFile } = require('./tools');
 const { fetchUrl, searchWeb } = require('./web-tools');
 const session = require('./session');
 
@@ -94,6 +94,14 @@ const TOOL_DEFS = [
     },
     required: ['target', 'key', 'value'],
   },
+  {
+    name: 'read_skill',
+    description: 'Load the full content of a skill file by name. Always call this before using a skill — the system prompt only contains the skill index. Example: read_skill("stripe") loads stripe_skill.md.',
+    params: {
+      name: { type: 'string', description: 'Skill name without _skill.md suffix (e.g. "stripe", "github")' },
+    },
+    required: ['name'],
+  },
 ];
 
 const OPENAI_TOOLS = TOOL_DEFS.map(t => ({
@@ -122,7 +130,7 @@ const ANTHROPIC_TOOLS = TOOL_DEFS.map(t => ({
  * tool call that included a nested object such as "headers":{…}.
  */
 function extractToolJson(text) {
-  const VALID = new Set(['command_proposal','internal_exec','send_telegram','fetch_url','search_web','update_config']);
+  const VALID = new Set(['command_proposal','internal_exec','send_telegram','fetch_url','search_web','update_config','read_skill']);
   for (let i = 0; i < text.length; i++) {
     if (text[i] !== '{') continue;
     let depth = 0, inStr = false, esc = false;
@@ -156,6 +164,7 @@ function isValidTool(json) {
   if (json.type === 'fetch_url'        && json.url)                  return true;
   if (json.type === 'search_web'       && json.query)                return true;
   if (json.type === 'update_config'    && json.target && json.key)   return true;
+  if (json.type === 'read_skill'       && json.name)                 return true;
   return false;
 }
 
@@ -577,6 +586,7 @@ TOOLS — to use a tool emit ONLY the raw JSON object on its own line. No XML. N
 {"type":"internal_exec","command":"..."}                                    — shell cmd in your container (no approval needed)
 {"type":"fetch_url","url":"...","method":"GET","headers":{},"body":"..."}   — fetch URL / call API
 {"type":"search_web","query":"..."}                                         — web search
+{"type":"read_skill","name":"..."}                                          — load a skill's full content (call before using any skill)
 {"type":"update_config","target":"config|env","key":"...","value":"..."}    — update agent settings
 {"type":"command_proposal","command":"...","explanation":"..."}             — host command (needs user approval)
 {"type":"send_telegram","message":"..."}                                    — send Telegram message
@@ -762,7 +772,7 @@ async function queryLLMLoop(messages, { onProgress, onChunk, onThinking, signal,
 
     const parsed = parseResponse(result.text);
 
-    const TOOL_TYPES = ['internal_exec', 'fetch_url', 'search_web', 'update_config'];
+    const TOOL_TYPES = ['internal_exec', 'fetch_url', 'search_web', 'update_config', 'read_skill'];
 
     // Planning-statement nudge — fires when the model narrates intent (e.g. "I'll schedule
     // that for you") instead of calling a tool. Inject a system correction and retry once.
@@ -830,6 +840,9 @@ async function queryLLMLoop(messages, { onProgress, onChunk, onThinking, signal,
     } else if (parsed.type === 'update_config') {
       console.log(`[update_config] target=${parsed.target} key=${parsed.key}`);
       output = updateAgentConfig(parsed.target, parsed.key, parsed.value);
+    } else if (parsed.type === 'read_skill') {
+      console.log(`[read_skill] ${parsed.name}`);
+      output = readSkillFile(parsed.name);
     }
 
     // Check abort immediately after tool execution — don't wait for next iteration
@@ -841,6 +854,7 @@ async function queryLLMLoop(messages, { onProgress, onChunk, onThinking, signal,
     const label = parsed.type === 'internal_exec' ? `\`${parsed.command}\``
                 : parsed.type === 'fetch_url'     ? `fetch ${parsed.url}`
                 : parsed.type === 'update_config' ? `config: ${parsed.key} = ${parsed.value}`
+                : parsed.type === 'read_skill'    ? `skill: ${parsed.name}`
                 : `search "${parsed.query}"`;
 
     // Progress notification (Telegram live update)

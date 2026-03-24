@@ -7,6 +7,10 @@ const ENV_PATH = process.env.NODE_ENV === 'production'
   ? '/app/config/.env'
   : path.join(__dirname, '..', 'config', '.env');
 
+const SKILLS_DIR = process.env.NODE_ENV === 'production'
+  ? '/app/skills'
+  : path.join(__dirname, '..', 'skills');
+
 const SAFE_ROOT = process.env.NODE_ENV === 'production' ? '/mnt/safe' : __dirname;
 // Normalised with trailing separator so /mnt/safe_evil cannot pass the prefix check
 const SAFE_ROOT_PREFIX = SAFE_ROOT.endsWith(path.sep) ? SAFE_ROOT : SAFE_ROOT + path.sep;
@@ -138,10 +142,32 @@ function updateAgentConfig(target, key, value) {
   }
 }
 
+/**
+ * Read a skill file by name (without _skill.md suffix).
+ * Returns the full markdown content or an error message if not found.
+ */
+function readSkillFile(name) {
+  try {
+    const sanitised = path.basename(name.replace(/[^a-zA-Z0-9_-]/g, ''));
+    const filePath  = path.join(SKILLS_DIR, `${sanitised}_skill.md`);
+    if (!fs.existsSync(filePath)) {
+      const available = fs.readdirSync(SKILLS_DIR)
+        .filter(f => f.endsWith('_skill.md'))
+        .map(f => f.replace('_skill.md', ''))
+        .join(', ');
+      return `Skill "${name}" not found. Available skills: ${available || 'none'}`;
+    }
+    return fs.readFileSync(filePath, 'utf8');
+  } catch (err) {
+    return `Error reading skill: ${err.message}`;
+  }
+}
+
 module.exports = {
   executeShellCommand,
   readFile,
   writeFile,
   listDirectory,
   updateAgentConfig,
+  readSkillFile,
 };
