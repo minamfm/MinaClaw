@@ -707,8 +707,8 @@ async function compactHistory(msgs) {
  * newMessages: simple text format only — safe to persist to session across provider changes
  */
 async function queryLLMLoop(messages, { onProgress, onChunk, onThinking, signal, sessionId } = {}) {
-  const MAX_STEPS  = 10;
-  const WARN_STEP  = 8; // inject a wrap-up nudge before hard-stopping
+  const MAX_STEPS  = 25;
+  const WARN_STEP  = 23; // inject a wrap-up nudge before hard-stopping
   let msgs = [...messages];
 
   // Auto-compact when estimated token count approaches the context window limit
