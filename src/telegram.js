@@ -173,9 +173,9 @@ function startTelegramBot() {
 
     ctx.sendChatAction('typing');
     const typingInterval = setInterval(() => ctx.sendChatAction('typing'), 4000);
+    const verbose = loadConfig().verboseMessages !== false;
 
     // Progress message — created on first tool call, edited on each subsequent one
-    // Currently disabled — swap null → onProgress in queryLLMLoop call to re-enable
     let progressMsgId = null;
     let progressLines = [];
     let progressSent  = false;
@@ -194,19 +194,16 @@ function startTelegramBot() {
       }
     };
 
-    // Thinking message — created on first thinking chunk, collapsed to 💭 when done
+    // Thinking message — created on first thinking chunk, kept as-is when done
     let thinkingMsgId    = null;
     let thinkingCreating = false;
     let thinkingLastEdit = 0;
 
     const onThinking = (accumulated) => {
-      // null = reset signal between tool steps: collapse current message and clear for next step
+      // null = reset signal between tool steps: clear ID so next step creates a new message
       if (accumulated === null) {
-        if (thinkingMsgId) {
-          ctx.telegram.editMessageText(ctx.chat.id, thinkingMsgId, null, '\u{1F4AD}').catch(() => {});
-          thinkingMsgId = null;
-          thinkingLastEdit = 0;
-        }
+        thinkingMsgId    = null;
+        thinkingLastEdit = 0;
         return;
       }
       const preview = accumulated.length > 800 ? '\u2026' + accumulated.slice(-800) : accumulated;
@@ -284,15 +281,16 @@ function startTelegramBot() {
     }
 
     try {
-      const { text: llmText, usage, parsed, newMessages, hitLimit, aborted } = await queryLLMLoop(messages, { onProgress, onChunk, onThinking, signal, sessionId });
+      const { text: llmText, usage, parsed, newMessages, hitLimit, aborted } = await queryLLMLoop(messages, {
+        onProgress: verbose ? onProgress : null,
+        onChunk,
+        onThinking: verbose ? onThinking : null,
+        signal,
+        sessionId,
+      });
       clearInterval(typingInterval);
       clearTimeout(workingTimer);
       activeRequests.delete(sessionId);
-
-      // Collapse thinking message now that the answer is ready
-      if (thinkingMsgId) {
-        await ctx.telegram.editMessageText(ctx.chat.id, thinkingMsgId, null, '\u{1F4AD}').catch(() => {});
-      }
 
       // New message arrived and aborted this request — mark partial output and stop
       if (aborted) {
@@ -368,9 +366,6 @@ function startTelegramBot() {
       clearInterval(typingInterval);
       clearTimeout(workingTimer);
       activeRequests.delete(sessionId);
-      if (thinkingMsgId) {
-        ctx.telegram.editMessageText(ctx.chat.id, thinkingMsgId, null, '\u{1F4AD}').catch(() => {});
-      }
       console.error('Bot handler error:', err);
       ctx.reply('Sorry, something went wrong on my end. Please try again.').catch(() => {});
     }

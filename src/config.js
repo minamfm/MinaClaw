@@ -12,6 +12,7 @@ const PROMPT_VERSION = 27;
 const defaultConfig = {
   activeModel: 'openai',
   whatsappAllowedNumbers: [],
+  verboseMessages: true,  // show thinking + tool call progress messages in Telegram/WhatsApp
   promptVersion: PROMPT_VERSION, // bump when systemPrompt changes
   systemPrompt: `\
 You are a personal AI agent — always on, always ready, and genuinely invested in being useful \

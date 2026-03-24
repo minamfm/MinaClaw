@@ -152,6 +152,17 @@
       <div id="model-list"><span class="spin"></span></div>
       <button class="btn" style="margin-top:12px;" onclick="saveModels()">Save</button>
     </div>
+    <div class="card">
+      <h3>Message Settings</h3>
+      <div class="row" style="align-items:center;gap:12px;">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+          <input type="checkbox" id="verbose-toggle" onchange="saveVerbose(this.checked)">
+          <span>Show thinking &amp; tool call messages</span>
+        </label>
+        <span id="verbose-badge"></span>
+      </div>
+      <p style="margin:8px 0 0;font-size:12px;color:var(--muted);">When enabled, Telegram and WhatsApp show live thinking output and tool call progress. When disabled, only the final answer is sent.</p>
+    </div>
   </div>
 
   <!-- ── WhatsApp ── -->
@@ -362,6 +373,14 @@ async function loadModels() {
       `<span class="badge green">▶ ${esc(activeModel)}</span> &nbsp;${esc(models[activeModel] || '(default)')}`;
     document.getElementById('model-sel').value = activeModel;
 
+    const verbose = cfg.verboseMessages !== false;
+    const verboseToggle = document.getElementById('verbose-toggle');
+    if (verboseToggle) {
+      verboseToggle.checked = verbose;
+      document.getElementById('verbose-badge').innerHTML =
+        `<span class="badge ${verbose ? 'green' : 'red'}">${verbose ? 'enabled' : 'disabled'}</span>`;
+    }
+
     const providers = ['openai','anthropic','gemini','mistral','grok','kimi','deepseek','ollama'];
     document.getElementById('model-list').innerHTML = providers.map(p => `
       <div class="model-row">
@@ -381,6 +400,13 @@ async function switchProvider() {
   await api('POST', '/config', { activeModel: val });
   toast('Switched to ' + val);
   loadModels();
+}
+
+async function saveVerbose(val) {
+  await api('POST', '/config', { verboseMessages: val });
+  document.getElementById('verbose-badge').innerHTML =
+    `<span class="badge ${val ? 'green' : 'red'}">${val ? 'enabled' : 'disabled'}</span>`;
+  toast(val ? 'Verbose messages enabled' : 'Verbose messages disabled');
 }
 
 async function saveModels() {

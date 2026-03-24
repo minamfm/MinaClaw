@@ -286,6 +286,11 @@ async function configureMenu() {
         },
         { value: 'prompt',    label: 'System Prompt' },
         {
+          value: 'verbose',
+          label: 'Verbose Messages',
+          hint: config.verboseMessages !== false ? '● thinking + tool calls shown' : '○ silent mode',
+        },
+        {
           value: 'websearch',
           label: 'Web Search',
           hint: (env.BRAVE_API_KEY && env.BRAVE_API_KEY.trim())       ? '● Brave Search'
@@ -312,6 +317,7 @@ async function configureMenu() {
         case 'ollama':    await configureOllama(); break;
         case 'active':    await selectActiveModel(); break;
         case 'prompt':    await editSystemPrompt(); break;
+        case 'verbose':   await toggleVerboseMessages(); break;
         case 'websearch': await configureWebSearch(); break;
       }
     } catch (e) {
@@ -772,6 +778,22 @@ async function selectActiveModel() {
   config.activeModel = model;
   saveConfig(config);
   log.success(`Active provider set to ${model} (${config.models[model]}).`);
+}
+
+async function toggleVerboseMessages() {
+  const config = loadConfig();
+  const current = config.verboseMessages !== false;
+  const choice = orCancel(await select({
+    message: `Verbose Messages — thinking + tool call messages in Telegram/WhatsApp`,
+    options: [
+      { value: true,  label: 'Enabled',  hint: 'show thinking and tool call progress messages' },
+      { value: false, label: 'Disabled', hint: 'silent mode — only show final answer' },
+    ],
+    initialValue: current,
+  }));
+  if (choice === null) return;
+  await api('POST', '/config', { verboseMessages: choice });
+  outro(choice ? 'Verbose messages enabled.' : 'Verbose messages disabled — silent mode.');
 }
 
 async function editSystemPrompt() {
