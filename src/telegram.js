@@ -200,12 +200,9 @@ function startTelegramBot() {
     let thinkingLastEdit = 0;
 
     const onThinking = (accumulated) => {
-      // null = reset signal between tool steps: clear ID so next step creates a new message
-      if (accumulated === null) {
-        thinkingMsgId    = null;
-        thinkingLastEdit = 0;
-        return;
-      }
+      // null = reset signal between tool steps: keep the same message, just continue editing it
+      if (accumulated === null) return;
+
       const preview = accumulated.length > 800 ? '\u2026' + accumulated.slice(-800) : accumulated;
       const body = `\u{1F4AD} Thinking...\n\n${preview}`;
       const now = Date.now();
